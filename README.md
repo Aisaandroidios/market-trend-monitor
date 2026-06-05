@@ -15,7 +15,7 @@
 - 策略归因：按标的、方向、市场状态、长期趋势、模型信心和模拟成交盈亏识别强项/弱项，并回流到历史反馈分。
 - Walk-forward 验证：用过去窗口选参数，再在未来窗口验证，避免一次性回测过拟合。
 - 胜率校准：按预测概率分桶复盘真实胜率，自动下调过度乐观的概率。
-- 仓位引擎：单笔风险上限、日/周亏损闸门、连续亏损降仓、同类资产风险限额、波动/低流动性过滤。
+- 仓位引擎：单笔风险上限、日/周亏损闸门、连续亏损降仓、同类资产风险限额、波动/低流动性降仓，极端低流动性才拦截。
 - 衍生品/盘口因子：open interest、全市场多空比、mark/index 基差、盘口失衡。
 - 事件风险和模型治理：宏观/监管/财报/黑天鹅事件降权，最近 20/50/100 条表现漂移监控。
 - 美股交易时段感知：盘中、盘前、盘后、非交易时段、周末使用不同推送/扫描频率。
@@ -81,6 +81,11 @@ npm start
 TELEGRAM_BOT_TOKEN=replace-with-token
 TELEGRAM_CHAT_ID=-100xxxxxxxxxx
 TELEGRAM_TOPIC_MAP={"BTCUSDT":123,"ETHUSDT":124,"QQQUSDT":125,"MCDUSDT":126}
+PAPER_ACCOUNT_TOPIC_ID=2597
+PAPER_DAILY_SUMMARY_ENABLED=true
+PAPER_DAILY_SUMMARY_TIME=08:30
+STRATEGY_ATTRIBUTION_TOPIC_ID=2679
+PROBABILITY_CALIBRATION_TOPIC_ID=2683
 ```
 
 获取 Topic ID：
@@ -90,6 +95,14 @@ TELEGRAM_BOT_TOKEN=your-token node scripts/telegram-topics.js
 ```
 
 在群里的每个 Topic 发一条消息，然后脚本会输出 `chat_id` 和 `message_thread_id`。
+
+`PAPER_ACCOUNT_TOPIC_ID` 用于集中接收模拟账户、仓位、开仓历史和风控拦截信息。交易信号推送不会再附带仓位数据，避免每个标的 Topic 里消息过长。仓位 Topic 只在开仓、平仓或持仓结构变化时推送；也可以在群里发送 `/positions`、`/position`、`/account`、`/仓位`、`/持仓` 或 `/账户` 主动查看。
+
+`PAPER_DAILY_SUMMARY_ENABLED=true` 会每天按北京时间 `PAPER_DAILY_SUMMARY_TIME` 自动把每日交易结果总结发到仓位 Topic。日报会按北京时间当天平仓单重新计算已实现盈亏、今日多单/空单胜率、当前持仓、风控拦截和下一交易日关注；也可以发送 `/daily`、`/summary`、`/日报` 或 `/每日总结` 主动查看。
+
+`STRATEGY_ATTRIBUTION_TOPIC_ID` 用于集中接收策略归因数据。系统只在归因结果变化时推送；也可以发送 `/attribution`、`/performance` 或 `/归因` 主动查看。
+
+`PROBABILITY_CALIBRATION_TOPIC_ID` 用于集中接收胜率校准数据。系统只在分桶真实胜率、校准误差、方向/标的校准结果变化时推送；也可以发送 `/calibration`、`/winrate`、`/胜率` 或 `/校准` 主动查看。
 
 ## API
 
@@ -184,6 +197,7 @@ PAPER_TRADING_ENABLED=true
 PAPER_INITIAL_BALANCE=10000
 PAPER_RISK_PER_TRADE=0.02
 PAPER_MAX_OPEN_POSITIONS=6
+PAPER_REQUIRE_DATA_SOURCE=true
 PAPER_FEE_RATE=0
 PAPER_SLIPPAGE_BPS=0
 PAPER_POSITION_RISK_ENABLED=true
@@ -195,6 +209,12 @@ PAPER_MAX_CONSECUTIVE_LOSSES=4
 ```
 
 系统会在每轮信号计算后，用当前入场、止盈、止损更新虚拟持仓。命中止盈/止损或出现同标的反向高置信信号时，模拟账户会平仓并记录盈亏。新开仓前会检查日/周亏损、连续亏损、同类资产风险、ATR/价格、成交量倍率和风险收益比；不合格的单会被记录为 `recentRiskEvents`。按当前需求，手续费、滑点和资金费率不参与模拟记账。
+
+小资金账户的流动性规则采用“软降仓”为主：`PAPER_MIN_QUOTE_VOLUME_24H` 和 `PAPER_LOW_VOLUME_RATIO` 低于阈值时会明显降低风险预算，不会直接禁止开仓。只有绝对成交额低于 `PAPER_HARD_MIN_QUOTE_VOLUME_24H` 的极端低流动性场景才会硬拦截；`PAPER_HARD_LOW_VOLUME_RATIO` 这类相对量能异常只用于进一步压低仓位。
+
+默认 `PAPER_REQUIRE_DATA_SOURCE=true`，模拟账户只跟随带有明确行情来源的策略开仓，避免本地 smoke 或手工脚本把无来源测试价格写进真实模拟账户。
+
+胜率、胜率校准、策略归因和模型治理只把触发计划止盈 `TAKE_PROFIT` 的信号计为成功，只把触发计划止损 `STOP_LOSS` 的信号计为失败。未触达止盈/止损的浮盈浮亏不进入胜率分母，只显示为观察中，避免把短期价格波动误当成策略胜负。
 
 ## 动态策略标准
 

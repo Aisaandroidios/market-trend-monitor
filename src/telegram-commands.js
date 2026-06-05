@@ -5,6 +5,10 @@ import { binanceSymbolForTopicSymbol } from "./binance-aliases.js";
 import { equityMetadataForSymbol, sourceStatusLabel } from "./equity-metadata.js";
 import { hyperliquidCoinForDecisionSymbol } from "./decision-engine.js";
 import {
+  formatPaperAccountMessage,
+  formatPaperDailySummaryMessage,
+  formatProbabilityCalibrationMessage,
+  formatStrategyAttributionMessage,
   formatTradeIdeaMessage,
   parseTelegramTopicMap,
   sendTelegramMessage
@@ -31,6 +35,10 @@ export function commandFromText(text = "") {
   if (["signal", "latest", "策略", "最新"].includes(normalized)) return normalized === "latest" || normalized === "最新" ? "latest" : "signal";
   if (["best", "top", "最高", "最强"].includes(normalized)) return "best";
   if (["source", "code", "contract", "合约", "代码", "数据源"].includes(normalized)) return "source";
+  if (["positions", "position", "account", "paper", "仓位", "持仓", "账户"].includes(normalized)) return "positions";
+  if (["daily", "summary", "day", "report", "日报", "每日", "每日总结", "交易总结", "每日交易"].includes(normalized)) return "daily";
+  if (["attribution", "attr", "performance", "perf", "strategyattribution", "归因", "策略归因"].includes(normalized)) return "attribution";
+  if (["calibration", "probability", "winrate", "win", "概率", "校准", "胜率", "胜率校准"].includes(normalized)) return "calibration";
   if (["id", "topic"].includes(normalized)) return "id";
   if (["help", "start"].includes(normalized)) return "help";
   return null;
@@ -139,7 +147,8 @@ export function buildTopicReply({
   messageThreadId,
   chatId,
   topicMap = parseTelegramTopicMap(),
-  snapshot
+  snapshot,
+  now = Date.now
 }) {
   const symbol = reverseTelegramTopicMap(topicMap)[Number(messageThreadId)];
 
@@ -159,8 +168,28 @@ export function buildTopicReply({
       "/latest - 获取当前 Topic 对应标的最新信息",
       "/best - 获取已配置 Topic 标的里的最高置信方向",
       "/source - 查看当前 Topic 的 Binance / Hyperliquid 合约代码",
+      "/positions - 查看模拟账户和当前仓位",
+      "/daily - 查看每日交易结果总结",
+      "/attribution - 查看策略归因数据",
+      "/calibration - 查看胜率校准数据",
       "/id - 查看当前 Topic ID"
     ].join("\n");
+  }
+
+  if (command === "positions") {
+    return formatPaperAccountMessage(snapshot.paperAccount, { reason: "命令查询" }) || "模拟账户暂无数据。";
+  }
+
+  if (command === "daily") {
+    return formatPaperDailySummaryMessage(snapshot.paperAccount, { reason: "命令查询", now }) || "每日交易总结暂无数据。";
+  }
+
+  if (command === "attribution") {
+    return formatStrategyAttributionMessage(snapshot.performanceAttribution, { reason: "命令查询" }) || "策略归因暂无数据。";
+  }
+
+  if (command === "calibration") {
+    return formatProbabilityCalibrationMessage(snapshot.probabilityCalibration, { reason: "命令查询" }) || "胜率校准暂无数据。";
   }
 
   if (command === "best") {

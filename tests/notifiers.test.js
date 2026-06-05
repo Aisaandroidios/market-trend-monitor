@@ -3,7 +3,10 @@ import test from "node:test";
 
 import {
   formatBestSignalMessage,
+  formatPaperDailySummaryMessage,
   formatMarketReversalMessage,
+  formatProbabilityCalibrationMessage,
+  formatStrategyAttributionMessage,
   formatSignalMessage,
   formatTopicStatusMessage,
   formatTradeIdeaMessage,
@@ -14,11 +17,268 @@ import {
   sendLarkMessage,
   sendSignalNotifications,
   sendMarketReversalNotifications,
+  sendPaperDailySummaryNotification,
+  sendProbabilityCalibrationNotification,
+  sendStrategyAttributionNotification,
   sendTopicStatusNotifications,
   sendTelegramRoutedMessage,
   sendTelegramMessage,
   sendTelegramSymbolMessage
 } from "../src/notifiers.js";
+
+const sampleAttribution = {
+  generatedAt: "2026-06-05T09:00:00.000Z",
+  total: {
+    signals: 12,
+    reviewed: 6,
+    successes: 4,
+    failures: 2,
+    pending: 1,
+    successRate: 66.67,
+    paperTrades: 3,
+    paperWins: 2,
+    paperLosses: 1,
+    paperBreakeven: 0,
+    paperWinRate: 66.67,
+    netPnl: 128.45,
+    avgPnl: 42.82,
+    score: 0.68,
+    sampleScore: 0.55
+  },
+  strengths: [
+    {
+      key: "ETHUSDT:SHORT",
+      label: "ETHUSDT:SHORT",
+      signals: 4,
+      reviewed: 3,
+      successes: 3,
+      failures: 0,
+      paperTrades: 1,
+      paperWins: 1,
+      paperLosses: 0,
+      paperWinRate: 100,
+      netPnl: 75,
+      score: 0.83,
+      sampleScore: 0.5
+    }
+  ],
+  weaknesses: [
+    {
+      key: "QQQUSDT:LONG",
+      label: "QQQUSDT:LONG",
+      signals: 3,
+      reviewed: 2,
+      successes: 0,
+      failures: 2,
+      paperTrades: 1,
+      paperWins: 0,
+      paperLosses: 1,
+      paperWinRate: 0,
+      netPnl: -42.5,
+      score: 0.24,
+      sampleScore: 0.42
+    }
+  ],
+  recommendations: [
+    "优先保留强项: ETHUSDT:SHORT。",
+    "自动降低弱项权重: QQQUSDT:LONG。"
+  ],
+  policyHints: {
+    boost: ["ETHUSDT:SHORT"],
+    reduce: ["QQQUSDT:LONG"],
+    avoidSymbols: ["QQQUSDT"]
+  }
+};
+
+const sampleProbabilityCalibration = {
+  generatedAt: "2026-06-05T09:00:00.000Z",
+  status: "ok",
+  bucketSize: 5,
+  minBucketSamples: 4,
+  minTotalSamples: 6,
+  overall: {
+    samples: 18,
+    successes: 11,
+    failures: 7,
+    predictedAvg: 65.4,
+    realizedRate: 61.11,
+    overconfidence: 4.29,
+    expectedCalibrationError: 7.8,
+    brierScore: 0.2123
+  },
+  buckets: [
+    {
+      key: "55-60",
+      start: 55,
+      end: 60,
+      samples: 5,
+      successes: 2,
+      failures: 3,
+      predictedAvg: 57.5,
+      realizedRate: 40,
+      calibrationError: 17.5,
+      reliability: 0.22
+    },
+    {
+      key: "65-70",
+      start: 65,
+      end: 70,
+      samples: 8,
+      successes: 6,
+      failures: 2,
+      predictedAvg: 66.2,
+      realizedRate: 75,
+      calibrationError: 8.8,
+      reliability: 0.47
+    }
+  ],
+  directions: {
+    long: { samples: 7, successes: 3, failures: 4, realizedRate: 42.86 },
+    short: { samples: 11, successes: 8, failures: 3, realizedRate: 72.73 }
+  },
+  symbols: [
+    { symbol: "ETHUSDT", samples: 6, successes: 5, failures: 1, predictedAvg: 64, realizedRate: 83.33 },
+    { symbol: "QQQUSDT", samples: 4, successes: 1, failures: 3, predictedAvg: 67, realizedRate: 25 }
+  ],
+  samples: []
+};
+
+const samplePaperAccountForDailySummary = {
+  enabled: true,
+  initialBalance: 10000,
+  balance: 10060,
+  equity: 10120,
+  peakEquity: 10200,
+  maxDrawdownPercent: 1.3,
+  openPositionCount: 2,
+  closedTradeCount: 2,
+  openPositions: [
+    {
+      id: "PAPER-3",
+      symbol: "ETHUSDT",
+      direction: "LONG",
+      entryPrice: 3000,
+      currentPrice: 3060,
+      takeProfit: 3180,
+      stopLoss: 2940,
+      riskAmount: 200,
+      riskReward: 3,
+      unrealizedPnl: 120
+    }
+  ],
+  recentOpenHistory: [
+    {
+      id: "PAPER-4",
+      status: "OPEN",
+      symbol: "BTCUSDT",
+      direction: "SHORT",
+      openedAt: "2026-06-05T00:30:00.000Z",
+      entryPrice: 68000,
+      takeProfit: 66000,
+      stopLoss: 69000,
+      riskAmount: 100,
+      riskReward: 2
+    },
+    {
+      id: "PAPER-2",
+      status: "CLOSED",
+      symbol: "BNBUSDT",
+      direction: "SHORT",
+      openedAt: "2026-06-04T22:00:00.000Z",
+      closedAt: "2026-06-05T02:00:00.000Z",
+      closeReason: "TAKE_PROFIT",
+      entryPrice: 588,
+      exitPrice: 570,
+      netPnl: 45,
+      returnPercent: 2.1
+    },
+    {
+      id: "PAPER-1",
+      status: "CLOSED",
+      symbol: "SOLUSDT",
+      direction: "LONG",
+      openedAt: "2026-06-04T20:00:00.000Z",
+      closedAt: "2026-06-05T03:00:00.000Z",
+      closeReason: "STOP_LOSS",
+      entryPrice: 155,
+      exitPrice: 150,
+      netPnl: -20,
+      returnPercent: -1.2
+    }
+  ],
+  recentClosedTrades: [
+    {
+      id: "PAPER-2",
+      status: "CLOSED",
+      symbol: "BNBUSDT",
+      direction: "SHORT",
+      closedAt: "2026-06-05T02:00:00.000Z",
+      closeReason: "TAKE_PROFIT",
+      entryPrice: 588,
+      exitPrice: 570,
+      netPnl: 45,
+      returnPercent: 2.1
+    },
+    {
+      id: "PAPER-1",
+      status: "CLOSED",
+      symbol: "SOLUSDT",
+      direction: "LONG",
+      closedAt: "2026-06-05T03:00:00.000Z",
+      closeReason: "STOP_LOSS",
+      entryPrice: 155,
+      exitPrice: 150,
+      netPnl: -20,
+      returnPercent: -1.2
+    }
+  ],
+  recentRiskEvents: [
+    {
+      evaluatedAt: "2026-06-05T04:00:00.000Z",
+      skippedSymbol: "QQQUSDT",
+      skippedDirection: "LONG",
+      summary: "流动性不足，禁止开仓"
+    }
+  ],
+  equityCurve: [
+    { at: "2026-06-05T00:00:00.000Z", equity: 10000, balance: 10000, openPositions: 1 },
+    { at: "2026-06-05T08:00:00.000Z", equity: 10120, balance: 10060, openPositions: 2 }
+  ],
+  stats: {
+    total: {
+      trades: 2,
+      wins: 1,
+      losses: 1,
+      breakeven: 0,
+      netPnl: 25,
+      winRate: 50,
+      long: { trades: 1, wins: 0, losses: 1, netPnl: -20, winRate: 0 },
+      short: { trades: 1, wins: 1, losses: 0, netPnl: 45, winRate: 100 }
+    },
+    periods: {
+      day: {
+        trades: 2,
+        wins: 1,
+        losses: 1,
+        breakeven: 0,
+        netPnl: 25,
+        winRate: 50,
+        long: { trades: 1, wins: 0, losses: 1, netPnl: -20, winRate: 0 },
+        short: { trades: 1, wins: 1, losses: 0, netPnl: 45, winRate: 100 }
+      }
+    }
+  },
+  config: {
+    maxOpenPositions: 6,
+    riskPerTrade: 0.02,
+    positionRisk: {
+      enabled: true,
+      dailyMaxLossPercent: 0.03,
+      weeklyMaxLossPercent: 0.07,
+      maxConsecutiveLosses: 4
+    }
+  }
+};
 
 test("Telegram sender skips when token or chat id is missing", async () => {
   const result = await sendTelegramMessage({
@@ -112,6 +372,151 @@ test("Telegram sender includes message_thread_id for forum topics", async () => 
   });
 
   assert.equal(JSON.parse(calls[0].options.body).message_thread_id, 77);
+});
+
+test("formats paper daily trading result summaries", () => {
+  const text = formatPaperDailySummaryMessage(samplePaperAccountForDailySummary, {
+    reason: "每日自动总结",
+    now: () => Date.UTC(2026, 5, 5, 1, 0, 0)
+  });
+
+  assert.ok(text.startsWith("📆 每日交易结果总结"));
+  assert.ok(text.includes("日期: 2026-06-05"));
+  assert.ok(text.includes("触发: 每日自动总结"));
+  assert.ok(text.includes("今日平仓: 2 | 胜 1 | 负 1 | 胜率 50%"));
+  assert.ok(text.includes("今日已实现: 🟢 盈利 $25"));
+  assert.ok(text.includes("今日权益变化: 🟢 盈利 $120"));
+  assert.ok(text.includes("SHORT: 1/1 | 胜率 100% | 🟢 盈利 $45"));
+  assert.ok(text.includes("LONG: 0/1 | 胜率 0% | 🔴 亏损 $-20"));
+  assert.ok(text.includes("BNBUSDT SHORT | TAKE_PROFIT"));
+  assert.ok(text.includes("SOLUSDT LONG | STOP_LOSS"));
+  assert.ok(text.includes("BTCUSDT SHORT"));
+  assert.ok(text.includes("当前持仓: 1"));
+  assert.ok(text.includes("ETHUSDT LONG"));
+  assert.ok(text.includes("最近拦截: QQQUSDT LONG | 流动性不足，禁止开仓"));
+  assert.ok(text.includes("明日/下一交易日关注"));
+  assert.ok(text.includes("单笔风险 2%"));
+});
+
+test("paper daily summary notification routes to the paper account topic", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { ok: true };
+      }
+    };
+  };
+
+  const result = await sendPaperDailySummaryNotification({
+    token: "token-123",
+    chatId: "-100123",
+    messageThreadId: 2597,
+    paperAccount: samplePaperAccountForDailySummary,
+    reason: "每日自动总结",
+    now: () => Date.UTC(2026, 5, 5, 1, 0, 0),
+    fetchImpl
+  });
+
+  assert.equal(result.ok, true);
+  const body = JSON.parse(calls[0].options.body);
+  assert.equal(body.message_thread_id, 2597);
+  assert.ok(body.text.includes("📆 每日交易结果总结"));
+  assert.ok(body.text.includes("北京时间:"));
+});
+
+test("formats strategy attribution messages for a dedicated topic", () => {
+  const text = formatStrategyAttributionMessage(sampleAttribution, { reason: "归因更新" });
+
+  assert.ok(text.startsWith("🧠 策略归因"));
+  assert.ok(text.includes("触发: 归因更新"));
+  assert.ok(text.includes("复盘: 6 | 成 4 | 败 2 | 胜率 66.67%"));
+  assert.ok(text.includes("模拟: 3 | 胜 2 | 负 1 | 胜率 66.67% | PnL $128.45"));
+  assert.ok(text.includes("✅ 强项"));
+  assert.ok(text.includes("ETHUSDT:SHORT"));
+  assert.ok(text.includes("⚠️ 弱项"));
+  assert.ok(text.includes("QQQUSDT:LONG"));
+  assert.ok(text.includes("🧭 调参建议"));
+  assert.ok(text.includes("优先保留强项"));
+  assert.ok(text.includes("🔧 自动权重"));
+  assert.ok(text.includes("加权: ETHUSDT:SHORT"));
+});
+
+test("strategy attribution notification routes to the configured topic", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { ok: true };
+      }
+    };
+  };
+
+  const result = await sendStrategyAttributionNotification({
+    token: "token-123",
+    chatId: "-100123",
+    messageThreadId: 2679,
+    attribution: sampleAttribution,
+    reason: "归因更新",
+    fetchImpl
+  });
+
+  assert.equal(result.ok, true);
+  const body = JSON.parse(calls[0].options.body);
+  assert.equal(body.message_thread_id, 2679);
+  assert.ok(body.text.includes("🧠 策略归因"));
+  assert.ok(body.text.includes("北京时间:"));
+});
+
+test("formats probability calibration messages for a dedicated topic", () => {
+  const text = formatProbabilityCalibrationMessage(sampleProbabilityCalibration, { reason: "校准更新" });
+
+  assert.ok(text.startsWith("🎚️ 胜率校准"));
+  assert.ok(text.includes("触发: 校准更新"));
+  assert.ok(text.includes("状态: ok | 样本: 18"));
+  assert.ok(text.includes("预测均值: 65.4% | 真实胜率: 61.11% | 偏差: +4.29%"));
+  assert.ok(text.includes("ECE: 7.8% | Brier: 0.2123"));
+  assert.ok(text.includes("📊 概率分桶"));
+  assert.ok(text.includes("65-70: 样本 8 | 预测 66.2% | 真实 75% | 误差 8.8%"));
+  assert.ok(text.includes("🧭 多空校准"));
+  assert.ok(text.includes("LONG: 样本 7 | 成 3 | 败 4 | 真实胜率 42.86%"));
+  assert.ok(text.includes("📍 标的校准"));
+  assert.ok(text.includes("ETHUSDT: 样本 6 | 预测 64% | 真实 83.33%"));
+});
+
+test("probability calibration notification routes to the configured topic", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options) => {
+    calls.push({ url, options });
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { ok: true };
+      }
+    };
+  };
+
+  const result = await sendProbabilityCalibrationNotification({
+    token: "token-123",
+    chatId: "-100123",
+    messageThreadId: 2683,
+    calibration: sampleProbabilityCalibration,
+    reason: "校准更新",
+    fetchImpl
+  });
+
+  assert.equal(result.ok, true);
+  const body = JSON.parse(calls[0].options.body);
+  assert.equal(body.message_thread_id, 2683);
+  assert.ok(body.text.includes("🎚️ 胜率校准"));
+  assert.ok(body.text.includes("北京时间:"));
 });
 
 test("Telegram sender retries after rate limiting", async () => {
@@ -506,8 +911,8 @@ test("formats trade idea messages with full professional context", () => {
   assert.ok(text.includes("ETHUSDT结构: 熊市 | 偏向: SHORT"));
   assert.ok(text.includes("ETHUSDT日线: 1767.88 | MA50: 1900 | MA200: 2100"));
   assert.ok(text.includes("说明: ETHUSDT 日线处于熊市结构"));
-  assert.ok(text.includes("🌍 大盘环境"));
-  assert.ok(text.includes("BTCUSDT结构: 熊市 | 偏向: SHORT"));
+  assert.equal(text.includes("🌍 大盘环境"), false);
+  assert.equal(text.includes("BTCUSDT结构: 熊市 | 偏向: SHORT"), false);
   assert.equal(text.includes("🌍 长期趋势"), false);
   assert.ok(text.includes("🧭 执行条件"));
   assert.ok(text.includes("✅ 主要依据"));

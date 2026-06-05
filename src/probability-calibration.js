@@ -1,3 +1,5 @@
+import { isPlannedExitReview } from "./review-outcome.js";
+
 function clamp(value, min = 0, max = 1) {
   return Math.min(Math.max(value, min), max);
 }
@@ -33,7 +35,7 @@ function actionableRecord(record) {
 
 function resolvedReview(record) {
   const review = record?.previousSignalReview;
-  return review?.outcome === "RIGHT" || review?.outcome === "WRONG" ? review : null;
+  return isPlannedExitReview(review) ? review : null;
 }
 
 function recordKey(record) {

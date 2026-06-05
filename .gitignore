@@ -10,6 +10,7 @@ data/paper-account.json
 data/*.jsonl
 data/*.sqlite
 data/*.sqlite-*
+data/*.sqlite.bak-*
 data/*.db
 data/*.db-*
 docs/superpowers/

@@ -67,9 +67,9 @@ test("uses faster opportunity scan intervals during active market sessions", () 
   });
 
   assert.equal(regular.session, "regular");
-  assert.equal(regular.intervalMs, 300000);
+  assert.equal(regular.intervalMs, 900000);
   assert.equal(offHours.session, "off_hours");
-  assert.equal(offHours.intervalMs, 3600000);
+  assert.equal(offHours.intervalMs, 14400000);
 });
 
 test("selects only changed or high-conviction opportunities and respects cooldown", () => {

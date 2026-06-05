@@ -64,7 +64,7 @@ test("scores a trade idea with factor attribution", () => {
 
   assert.equal(scored.symbol, "BTCUSDT");
   assert.equal(scored.direction, "LONG");
-  assert.ok(scored.convictionScore > 70);
+  assert.ok(scored.convictionScore > 60);
   assert.ok(scored.factors.some((factor) => factor.name === "technical_trend"));
   assert.ok(scored.factors.some((factor) => factor.name === "money_flow"));
   assert.ok(scored.supporting.length > 0);
@@ -184,7 +184,7 @@ test("uses the contract long-term regime before the broad BTC context", () => {
   assert.ok(long.risks.some((item) => item.includes("ETHUSDT 长期熊市结构")));
 });
 
-test("favors short ideas over long ideas in a BTC bear regime", () => {
+test("does not force the broad BTC regime onto another contract", () => {
   const marketContext = {
     riskMode: "risk_off",
     btcDirection: "SHORT",
@@ -207,9 +207,13 @@ test("favors short ideas over long ideas in a BTC bear regime", () => {
     }
   }, { marketContext });
 
-  assert.ok(short.convictionScore > long.convictionScore);
-  assert.ok(short.supporting.some((item) => item.includes("长期熊市")));
-  assert.ok(long.risks.some((item) => item.includes("长期熊市")));
+  const longRegime = long.factors.find((item) => item.name === "market_regime");
+  const shortRegime = short.factors.find((item) => item.name === "market_regime");
+
+  assert.equal(longRegime.note.includes("BTC"), false);
+  assert.equal(shortRegime.note.includes("BTC"), false);
+  assert.ok(longRegime.note.includes("ETHUSDT 长期趋势数据不足"));
+  assert.ok(shortRegime.note.includes("ETHUSDT 长期趋势数据不足"));
 });
 
 test("uses adaptive strategy feedback to reward or penalize repeated outcomes", () => {

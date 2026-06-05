@@ -207,7 +207,31 @@ test("reviews latest signal memory for the same symbol", () => {
 
   assert.equal(review.previousDirection, "SHORT");
   assert.equal(review.previousEntry, 65000);
-  assert.equal(review.label, "对");
+  assert.equal(review.label, "观察中");
+  assert.equal(review.outcome, "PENDING");
+  assert.equal(review.hit, "NONE");
+});
+
+test("keeps a signal pending until take profit or stop loss is touched", () => {
+  const review = reviewPreviousSignal({
+    previous: {
+      generatedAt: "2026-06-04T00:00:00.000Z",
+      symbol: "BTCUSDT",
+      direction: "SHORT",
+      entry: 65000,
+      takeProfit: 62000,
+      stopLoss: 66500
+    },
+    currentPrice: 64000,
+    candles: [
+      { openTime: Date.UTC(2026, 5, 4, 1), high: 65100, low: 63900, close: 64000 }
+    ]
+  });
+
+  assert.equal(review.label, "观察中");
+  assert.equal(review.outcome, "PENDING");
+  assert.equal(review.hit, "NONE");
+  assert.equal(review.detail, "尚未触发止盈/止损，继续观察，不计入胜负。");
 });
 
 test("summarizes cumulative strategy performance", () => {
@@ -219,7 +243,7 @@ test("summarizes cumulative strategy performance", () => {
       entry: 1800,
       takeProfit: 1900,
       stopLoss: 1750,
-      previousSignalReview: { outcome: "RIGHT", previousDirection: "SHORT" }
+      previousSignalReview: { outcome: "RIGHT", previousDirection: "SHORT", hit: "TAKE_PROFIT" }
     },
     {
       symbol: "SOLUSDT",
@@ -227,7 +251,7 @@ test("summarizes cumulative strategy performance", () => {
       entry: 70,
       takeProfit: 65,
       stopLoss: 73,
-      previousSignalReview: { outcome: "WRONG", previousDirection: "LONG" }
+      previousSignalReview: { outcome: "WRONG", previousDirection: "LONG", hit: "STOP_LOSS" }
     },
     {
       symbol: "XAUUSD",
@@ -269,6 +293,7 @@ test("summarizes daily weekly monthly and yearly performance in Beijing time", (
       previousSignalReview: {
         outcome: "RIGHT",
         previousDirection: "SHORT",
+        hit: "TAKE_PROFIT",
         previousGeneratedAt: "2026-06-04T01:00:00Z"
       }
     },
@@ -282,6 +307,7 @@ test("summarizes daily weekly monthly and yearly performance in Beijing time", (
       previousSignalReview: {
         outcome: "WRONG",
         previousDirection: "LONG",
+        hit: "STOP_LOSS",
         previousGeneratedAt: "2026-06-03T15:00:00Z"
       }
     },
@@ -308,6 +334,7 @@ test("summarizes daily weekly monthly and yearly performance in Beijing time", (
       previousSignalReview: {
         outcome: "RIGHT",
         previousDirection: "SHORT",
+        hit: "TAKE_PROFIT",
         previousGeneratedAt: "2026-05-31T10:00:00Z"
       }
     }
@@ -340,19 +367,19 @@ test("builds adaptive strategy feedback by symbol and direction", () => {
   const feedback = buildStrategyFeedback([
     {
       symbol: "BTCUSDT",
-      previousSignalReview: { outcome: "RIGHT", previousDirection: "SHORT" }
+      previousSignalReview: { outcome: "RIGHT", previousDirection: "SHORT", hit: "TAKE_PROFIT" }
     },
     {
       symbol: "BTCUSDT",
-      previousSignalReview: { outcome: "RIGHT", previousDirection: "SHORT" }
+      previousSignalReview: { outcome: "RIGHT", previousDirection: "SHORT", hit: "TAKE_PROFIT" }
     },
     {
       symbol: "BTCUSDT",
-      previousSignalReview: { outcome: "WRONG", previousDirection: "SHORT" }
+      previousSignalReview: { outcome: "WRONG", previousDirection: "SHORT", hit: "STOP_LOSS" }
     },
     {
       symbol: "ETHUSDT",
-      previousSignalReview: { outcome: "WRONG", previousDirection: "SHORT" }
+      previousSignalReview: { outcome: "WRONG", previousDirection: "SHORT", hit: "STOP_LOSS" }
     }
   ], {
     symbol: "BTCUSDT",
@@ -373,15 +400,15 @@ test("penalizes a direction after consecutive reviewed failures", () => {
   const feedback = buildStrategyFeedback([
     {
       symbol: "QQQUSDT",
-      previousSignalReview: { outcome: "RIGHT", previousDirection: "LONG" }
+      previousSignalReview: { outcome: "RIGHT", previousDirection: "LONG", hit: "TAKE_PROFIT" }
     },
     {
       symbol: "QQQUSDT",
-      previousSignalReview: { outcome: "WRONG", previousDirection: "LONG" }
+      previousSignalReview: { outcome: "WRONG", previousDirection: "LONG", hit: "STOP_LOSS" }
     },
     {
       symbol: "QQQUSDT",
-      previousSignalReview: { outcome: "WRONG", previousDirection: "LONG" }
+      previousSignalReview: { outcome: "WRONG", previousDirection: "LONG", hit: "STOP_LOSS" }
     }
   ], {
     symbol: "QQQUSDT",

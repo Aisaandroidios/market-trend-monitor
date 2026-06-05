@@ -44,6 +44,15 @@ function formatBeijingTimestamp(now = Date.now) {
   return `${value("year")}-${value("month")}-${value("day")} ${value("hour")}:${value("minute")}:${value("second")}`;
 }
 
+function formatBeijingDate(now = Date.now) {
+  return formatBeijingTimestamp(now).slice(0, 10);
+}
+
+function beijingDateKey(value) {
+  if (!value) return "";
+  return formatBeijingDate(new Date(value).getTime());
+}
+
 function textWithBeijingTime(text, now) {
   return `${text}\n\n北京时间: ${formatBeijingTimestamp(now)}`;
 }
@@ -355,9 +364,30 @@ function executionCondition(scored) {
 }
 
 function directionEmoji(direction) {
-  if (direction === "LONG") return "📈";
-  if (direction === "SHORT") return "📉";
-  return "⏸️";
+  if (direction === "LONG") return "🟢📈";
+  if (direction === "SHORT") return "🔴📉";
+  return "🟡⏸️";
+}
+
+function confidenceBadge(confidence) {
+  if (confidence === "HIGH") return "🟢 HIGH";
+  if (confidence === "MEDIUM") return "🟡 MEDIUM";
+  if (confidence === "LOW") return "⚪ LOW";
+  return confidence ?? "--";
+}
+
+function scoreBadge(score) {
+  const number = Number(score);
+  if (!Number.isFinite(number)) return "⚪";
+  if (number >= 75) return "🟢";
+  if (number >= 65) return "🟡";
+  return "⚪";
+}
+
+function actionBadge(action) {
+  if (action === "BUY") return "🟢 BUY";
+  if (action === "SELL") return "🔴 SELL";
+  return "🟡 WAIT";
 }
 
 function newsStatusLabel(status) {
@@ -753,12 +783,66 @@ function formatCurrency(value) {
   return `$${number.toFixed(2).replace(/\.?0+$/, "")}`;
 }
 
+function pnlBadge(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number === 0) return "⚪";
+  return number > 0 ? "🟢" : "🔴";
+}
+
 function formatPaperDirectionStats(label, stats = {}) {
   return `${label}: ${stats.wins ?? 0}/${stats.trades ?? 0} | 胜率 ${formatStatsRate(stats.winRate)}`;
 }
 
-function formatPaperAccountBlock(paperAccount) {
-  if (!paperAccount?.enabled) return [];
+function dailyPaperRows(rows = [], dateKey, timeField) {
+  return rows.filter((row) => beijingDateKey(row?.[timeField]) === dateKey);
+}
+
+function emptyDailyTradeStats() {
+  return {
+    trades: 0,
+    wins: 0,
+    losses: 0,
+    breakeven: 0,
+    netPnl: 0,
+    winRate: 0
+  };
+}
+
+function dailyTradeStats(trades = []) {
+  const stats = {
+    ...emptyDailyTradeStats(),
+    long: emptyDailyTradeStats(),
+    short: emptyDailyTradeStats()
+  };
+
+  function add(target, trade) {
+    target.trades += 1;
+    target.netPnl = Number((target.netPnl + Number(trade.netPnl ?? 0)).toFixed(2));
+    if (Number(trade.netPnl ?? 0) > 0) target.wins += 1;
+    else if (Number(trade.netPnl ?? 0) < 0) target.losses += 1;
+    else target.breakeven += 1;
+  }
+
+  for (const trade of trades) {
+    add(stats, trade);
+    if (trade.direction === "LONG") add(stats.long, trade);
+    if (trade.direction === "SHORT") add(stats.short, trade);
+  }
+
+  function finalize(target) {
+    const resolved = target.wins + target.losses;
+    target.winRate = resolved === 0 ? 0 : Number(((target.wins / resolved) * 100).toFixed(2));
+    return target;
+  }
+
+  finalize(stats);
+  finalize(stats.long);
+  finalize(stats.short);
+  return stats;
+}
+
+export function formatPaperAccountMessage(paperAccount, { reason = "账户更新" } = {}) {
+  if (!paperAccount?.enabled) return "";
 
   const total = paperAccount.stats?.total ?? {};
   const day = paperAccount.stats?.periods?.day ?? {};
@@ -768,32 +852,275 @@ function formatPaperAccountBlock(paperAccount) {
   const pnl = Number(paperAccount.equity ?? 0) - Number(paperAccount.initialBalance ?? 0);
   const openPositions = paperAccount.openPositions ?? [];
   const lastRiskEvent = paperAccount.recentRiskEvents?.[0];
+  const history = paperAccount.recentOpenHistory ?? [];
   const positionLines = openPositions.length === 0
     ? ["当前持仓: 无"]
     : [
         `当前持仓: ${openPositions.length}`,
-        ...openPositions.slice(0, 3).map((position) => (
-          `${position.symbol} ${position.direction} | 入场 ${position.entryPrice} | 风险 ${formatCurrency(position.riskAmount)} | 浮盈亏 ${formatCurrency(position.unrealizedPnl)}`
-        ))
+        ...openPositions.slice(0, 6).flatMap((position) => [
+          `${directionEmoji(position.direction)} ${position.symbol} ${position.direction}`,
+          `入场 ${position.entryPrice} | 现价 ${position.currentPrice ?? "--"} | TP ${position.takeProfit} | SL ${position.stopLoss}`,
+          `${pnlBadge(position.unrealizedPnl)} 浮盈亏 ${formatCurrency(position.unrealizedPnl)} | 风险 ${formatCurrency(position.riskAmount)} | RR ${position.riskReward}`
+        ])
       ];
+  const historyLines = history.length
+    ? history.slice(0, 5).flatMap((entry) => [
+        `${entry.status === "OPEN" ? "🟢" : pnlBadge(entry.netPnl)} ${entry.symbol} ${entry.direction} | ${entry.status}`,
+        `入场 ${entry.entryPrice} | TP ${entry.takeProfit} | SL ${entry.stopLoss}${entry.status === "CLOSED" ? ` | PnL ${formatCurrency(entry.netPnl)}` : ""}`
+      ])
+    : ["开仓历史: 暂无"];
   const riskLines = [
     `仓位引擎: ${paperAccount.config?.positionRisk?.enabled ? "开启" : "关闭"} | 单笔上限 ${formatStatsRate((paperAccount.config?.positionRisk?.maxRiskPerTrade ?? 0) * 100)}`,
     lastRiskEvent ? `最近拦截: ${lastRiskEvent.skippedSymbol ?? lastRiskEvent.symbol} | ${lastRiskEvent.summary}` : null
   ].filter(Boolean);
 
-  return [
-    "💼 模拟账户",
-    `余额: ${formatCurrency(paperAccount.balance)} | 权益: ${formatCurrency(paperAccount.equity)}`,
-    `累计盈亏: ${formatCurrency(pnl)} | 最大回撤: ${formatStatsRate(paperAccount.maxDrawdownPercent)}`,
+  return joinMessageLines([
+    "💼 仓位 / 模拟账户",
+    `触发: ${reason}`,
+    "",
+    "📌 账户概览",
+    `权益: ${formatCurrency(paperAccount.equity)} | 余额: ${formatCurrency(paperAccount.balance)}`,
+    `${pnlBadge(pnl)} 累计盈亏: ${formatCurrency(pnl)} | 最大回撤: ${formatStatsRate(paperAccount.maxDrawdownPercent)}`,
     `累计: ${total.wins ?? 0}/${total.trades ?? 0} | 胜率 ${formatStatsRate(total.winRate)}`,
     `多单: ${total.long?.wins ?? 0}/${total.long?.trades ?? 0} | 空单: ${total.short?.wins ?? 0}/${total.short?.trades ?? 0}`,
+    "",
+    "📊 周期表现",
     formatPaperDirectionStats("今日", day),
     formatPaperDirectionStats("本周", week),
     formatPaperDirectionStats("本月", month),
     formatPaperDirectionStats("本年", year),
+    "",
+    "🛡️ 风控状态",
     ...riskLines,
-    ...positionLines
+    "",
+    "📍 当前持仓",
+    ...positionLines,
+    "",
+    "🧾 开仓历史",
+    ...historyLines
+  ]);
+}
+
+function formatPaperDailyTradeLine(trade) {
+  return [
+    `${pnlBadge(trade.netPnl)} ${trade.symbol} ${trade.direction} | ${trade.closeReason ?? trade.status ?? "CLOSED"}`,
+    `PnL ${formatCurrency(trade.netPnl)} | 入 ${trade.entryPrice ?? "--"} -> 出 ${trade.exitPrice ?? "--"} | 回报 ${formatStatsRate(trade.returnPercent)}`
   ];
+}
+
+function formatPaperDailyOpenLine(entry) {
+  return [
+    `${directionEmoji(entry.direction)} ${entry.symbol} ${entry.direction}`,
+    `入场 ${entry.entryPrice ?? "--"} | TP ${entry.takeProfit ?? "--"} | SL ${entry.stopLoss ?? "--"} | 风险 ${formatCurrency(entry.riskAmount)} | RR ${entry.riskReward ?? "--"}`
+  ];
+}
+
+function formatPaperDailyPositionLine(position) {
+  return [
+    `${directionEmoji(position.direction)} ${position.symbol} ${position.direction}`,
+    `现价 ${position.currentPrice ?? "--"} | 入场 ${position.entryPrice ?? "--"} | TP ${position.takeProfit ?? "--"} | SL ${position.stopLoss ?? "--"}`,
+    `${pnlBadge(position.unrealizedPnl)} 浮盈亏 ${formatCurrency(position.unrealizedPnl)} | 风险 ${formatCurrency(position.riskAmount)} | RR ${position.riskReward ?? "--"}`
+  ];
+}
+
+function pnlLabel(value) {
+  const number = Number(value ?? 0);
+  if (number > 0) return `🟢 盈利 ${formatCurrency(number)}`;
+  if (number < 0) return `🔴 亏损 ${formatCurrency(number)}`;
+  return `⚪ 持平 ${formatCurrency(number)}`;
+}
+
+function formatPaperDailyFocus({ paperAccount, closedToday, openedToday, riskEventsToday }) {
+  const focus = [];
+  const day = paperAccount.stats?.periods?.day ?? {};
+  const dailyPnl = Number(day.netPnl ?? 0);
+  const openPositions = paperAccount.openPositions ?? [];
+
+  if (dailyPnl < 0) focus.push("今日已实现亏损，下一轮优先降低低置信/低RR信号频率。");
+  if (day.losses > day.wins) focus.push("今日亏单多于赢单，观察是否触发连续亏损降仓。");
+  if (openPositions.length >= Number(paperAccount.config?.maxOpenPositions ?? 6)) focus.push("持仓已接近上限，新开仓只保留最高置信机会。");
+  if (riskEventsToday.length) focus.push(`风控今日拦截 ${riskEventsToday.length} 次，继续过滤 ${riskEventsToday[0].skippedSymbol ?? riskEventsToday[0].symbol ?? "低质量"} 信号。`);
+  if (closedToday.length === 0 && openedToday.length === 0) focus.push("今日成交样本少，先观察高分机会，不强行交易。");
+  if (focus.length === 0) focus.push("保持当前仓位纪律：先等价格接近入场和执行条件同时满足。");
+
+  return focus.slice(0, 4).map((item) => `• ${item}`);
+}
+
+export function formatPaperDailySummaryMessage(paperAccount, {
+  reason = "每日自动总结",
+  now = Date.now
+} = {}) {
+  if (!paperAccount?.enabled) return "";
+
+  const dateKey = formatBeijingDate(now);
+  const dailySource = paperAccount.dailySummary?.date === dateKey ? paperAccount.dailySummary : null;
+  const totalPnl = Number(paperAccount.equity ?? 0) - Number(paperAccount.initialBalance ?? 0);
+  const equityRowsToday = dailySource?.equityCurve ?? dailyPaperRows(paperAccount.equityCurve ?? [], dateKey, "at");
+  const firstEquity = equityRowsToday[0]?.equity ?? paperAccount.initialBalance;
+  const lastEquity = equityRowsToday.at(-1)?.equity ?? paperAccount.equity;
+  const equityChange = Number(lastEquity ?? 0) - Number(firstEquity ?? 0);
+  const closedToday = dailySource?.closedTrades ?? dailyPaperRows(paperAccount.recentClosedTrades ?? [], dateKey, "closedAt");
+  const day = dailyTradeStats(closedToday);
+  const openedToday = dailySource?.openedEntries ?? dailyPaperRows(paperAccount.recentOpenHistory ?? [], dateKey, "openedAt");
+  const riskEventsToday = dailySource?.riskEvents ?? dailyPaperRows(paperAccount.recentRiskEvents ?? [], dateKey, "evaluatedAt");
+  const openPositions = paperAccount.openPositions ?? [];
+  const lastRiskEvent = riskEventsToday[0] ?? paperAccount.recentRiskEvents?.[0];
+
+  const closedLines = closedToday.length
+    ? closedToday.slice(0, 6).flatMap(formatPaperDailyTradeLine)
+    : ["今日平仓明细: 暂无"];
+  const openedLines = openedToday.length
+    ? openedToday.slice(0, 6).flatMap(formatPaperDailyOpenLine)
+    : ["今日新开仓: 暂无"];
+  const positionLines = openPositions.length
+    ? [
+        `当前持仓: ${openPositions.length}`,
+        ...openPositions.slice(0, 6).flatMap(formatPaperDailyPositionLine)
+      ]
+    : ["当前持仓: 无"];
+  const riskLines = [
+    `单笔风险 ${formatStatsRate((paperAccount.config?.riskPerTrade ?? 0) * 100)} | 最大持仓 ${openPositions.length}/${paperAccount.config?.maxOpenPositions ?? "--"}`,
+    `日亏损上限 ${formatStatsRate((paperAccount.config?.positionRisk?.dailyMaxLossPercent ?? 0) * 100)} | 周亏损上限 ${formatStatsRate((paperAccount.config?.positionRisk?.weeklyMaxLossPercent ?? 0) * 100)}`,
+    lastRiskEvent ? `最近拦截: ${lastRiskEvent.skippedSymbol ?? lastRiskEvent.symbol} ${lastRiskEvent.skippedDirection ?? lastRiskEvent.direction ?? ""} | ${lastRiskEvent.summary}` : null
+  ].filter(Boolean);
+
+  return joinMessageLines([
+    "📆 每日交易结果总结",
+    `日期: ${dateKey}`,
+    `触发: ${reason}`,
+    "",
+    "📌 今日结果",
+    `今日平仓: ${day.trades ?? closedToday.length} | 胜 ${day.wins ?? 0} | 负 ${day.losses ?? 0} | 胜率 ${formatStatsRate(day.winRate)}`,
+    `今日已实现: ${pnlLabel(day.netPnl)} | 今日权益变化: ${pnlLabel(equityChange)}`,
+    `账户权益: ${formatCurrency(paperAccount.equity)} | 余额: ${formatCurrency(paperAccount.balance)} | 累计盈亏 ${pnlLabel(totalPnl)}`,
+    `最大回撤: ${formatStatsRate(paperAccount.maxDrawdownPercent)} | 当前持仓数: ${openPositions.length}`,
+    "",
+    "📊 多空表现",
+    `LONG: ${day.long?.wins ?? 0}/${day.long?.trades ?? 0} | 胜率 ${formatStatsRate(day.long?.winRate)} | ${pnlLabel(day.long?.netPnl)}`,
+    `SHORT: ${day.short?.wins ?? 0}/${day.short?.trades ?? 0} | 胜率 ${formatStatsRate(day.short?.winRate)} | ${pnlLabel(day.short?.netPnl)}`,
+    "",
+    "🧾 今日平仓",
+    ...closedLines,
+    "",
+    "🟢 今日新开",
+    ...openedLines,
+    "",
+    "📍 当前持仓",
+    ...positionLines,
+    "",
+    "🛡️ 风控/纪律",
+    ...riskLines,
+    "",
+    "🧭 明日/下一交易日关注",
+    ...formatPaperDailyFocus({ paperAccount, closedToday, openedToday, riskEventsToday })
+  ]);
+}
+
+function formatAttributionBucket(bucket) {
+  const reviewedResolved = Number(bucket.successes ?? 0) + Number(bucket.failures ?? 0);
+  const reviewText = `复盘 ${bucket.successes ?? 0}/${reviewedResolved}`;
+  const paperText = `模拟 ${bucket.paperWins ?? 0}/${bucket.paperTrades ?? 0}`;
+  const pnlText = `PnL ${formatCurrency(bucket.netPnl)}`;
+  const scoreText = `分 ${Number(bucket.score ?? 0).toFixed(2)}`;
+  const sampleText = `样本 ${Number(bucket.sampleScore ?? 0).toFixed(2)}`;
+
+  return `${bucket.label ?? bucket.key}: ${reviewText} | ${paperText} | ${pnlText} | ${scoreText} | ${sampleText}`;
+}
+
+function formatAttributionList(items, emptyText) {
+  if (!items?.length) return [emptyText];
+  return items.slice(0, 5).map(formatAttributionBucket);
+}
+
+export function formatStrategyAttributionMessage(attribution, { reason = "归因更新" } = {}) {
+  if (!attribution?.total) return "";
+
+  const total = attribution.total ?? {};
+  const policyHints = attribution.policyHints ?? {};
+  const recommendations = attribution.recommendations?.length
+    ? attribution.recommendations.slice(0, 4)
+    : ["归因样本还少，先继续收集信号复盘和模拟成交。"];
+
+  return joinMessageLines([
+    "🧠 策略归因",
+    `触发: ${reason}`,
+    "",
+    "📌 总览",
+    `复盘: ${total.reviewed ?? 0} | 成 ${total.successes ?? 0} | 败 ${total.failures ?? 0} | 胜率 ${formatStatsRate(total.successRate)}`,
+    `模拟: ${total.paperTrades ?? 0} | 胜 ${total.paperWins ?? 0} | 负 ${total.paperLosses ?? 0} | 胜率 ${formatStatsRate(total.paperWinRate)} | PnL ${formatCurrency(total.netPnl)}`,
+    `归因分: ${Number(total.score ?? 0).toFixed(2)} | 样本权重: ${Number(total.sampleScore ?? 0).toFixed(2)}`,
+    "",
+    "✅ 强项",
+    ...formatAttributionList(attribution.strengths, "强项: 样本不足"),
+    "",
+    "⚠️ 弱项",
+    ...formatAttributionList(attribution.weaknesses, "弱项: 样本不足"),
+    "",
+    "🧭 调参建议",
+    ...recommendations.map((item) => `• ${item}`),
+    "",
+    "🔧 自动权重",
+    `加权: ${policyHints.boost?.length ? policyHints.boost.join(", ") : "暂无"}`,
+    `降权: ${policyHints.reduce?.length ? policyHints.reduce.join(", ") : "暂无"}`,
+    `暂避: ${policyHints.avoidSymbols?.length ? policyHints.avoidSymbols.join(", ") : "暂无"}`
+  ]);
+}
+
+function formatCalibrationSignedPercent(value) {
+  const number = Number(value ?? 0);
+  if (!Number.isFinite(number) || number === 0) return "0%";
+  return `${number > 0 ? "+" : ""}${formatStatsRate(number)}`;
+}
+
+function formatCalibrationBucket(bucket) {
+  return [
+    `${bucket.key}: 样本 ${bucket.samples ?? 0}`,
+    `预测 ${formatStatsRate(bucket.predictedAvg)}`,
+    `真实 ${formatStatsRate(bucket.realizedRate)}`,
+    `误差 ${formatStatsRate(bucket.calibrationError)}`,
+    `可靠 ${Math.round(Number(bucket.reliability ?? 0) * 100)}%`
+  ].join(" | ");
+}
+
+function formatCalibrationDirection(label, stats = {}) {
+  return `${label}: 样本 ${stats.samples ?? 0} | 成 ${stats.successes ?? 0} | 败 ${stats.failures ?? 0} | 真实胜率 ${formatStatsRate(stats.realizedRate)}`;
+}
+
+function formatCalibrationSymbol(stats = {}) {
+  return `${stats.symbol}: 样本 ${stats.samples ?? 0} | 预测 ${formatStatsRate(stats.predictedAvg)} | 真实 ${formatStatsRate(stats.realizedRate)}`;
+}
+
+export function formatProbabilityCalibrationMessage(calibration, { reason = "校准更新" } = {}) {
+  if (!calibration?.overall) return "";
+
+  const overall = calibration.overall ?? {};
+  const buckets = calibration.buckets?.length
+    ? calibration.buckets.slice().sort((left, right) => (right.samples ?? 0) - (left.samples ?? 0)).slice(0, 6)
+    : [];
+  const symbols = calibration.symbols?.length
+    ? calibration.symbols.slice(0, 6)
+    : [];
+
+  return joinMessageLines([
+    "🎚️ 胜率校准",
+    `触发: ${reason}`,
+    "",
+    "📌 总览",
+    `状态: ${calibration.status ?? "unknown"} | 样本: ${overall.samples ?? 0}`,
+    `预测均值: ${formatStatsRate(overall.predictedAvg)} | 真实胜率: ${formatStatsRate(overall.realizedRate)} | 偏差: ${formatCalibrationSignedPercent(overall.overconfidence)}`,
+    `ECE: ${formatStatsRate(overall.expectedCalibrationError)} | Brier: ${overall.brierScore ?? 0}`,
+    `分桶: ${calibration.bucketSize ?? "--"}% | 最小样本: ${calibration.minTotalSamples ?? "--"}`,
+    "",
+    "📊 概率分桶",
+    ...(buckets.length ? buckets.map(formatCalibrationBucket) : ["分桶: 样本不足"]),
+    "",
+    "🧭 多空校准",
+    formatCalibrationDirection("LONG", calibration.directions?.long),
+    formatCalibrationDirection("SHORT", calibration.directions?.short),
+    "",
+    "📍 标的校准",
+    ...(symbols.length ? symbols.map(formatCalibrationSymbol) : ["标的: 样本不足"])
+  ]);
 }
 
 const strategyPeriodLabels = [
@@ -862,12 +1189,11 @@ export function formatTradeIdeaMessage(idea, { marketContext = {}, paperAccount 
   const supporting = scored.supporting?.length ? scored.supporting : defaultSupporting(scored);
   const risks = risksForMessage(scored);
   const hasPolicy = scored.strategyPolicy || marketContext.strategyPolicy;
-  const hasPaperAccount = paperAccount || scored.paperAccount;
 
   return joinMessageLines([
     `🎯 标的: ${scored.symbol}`,
-    `${directionEmoji(scored.direction)} 方向: ${scored.direction} | ${scored.action}`,
-    `⭐ 综合分: ${formatScore(scored.convictionScore)} | ${scored.confidence}`,
+    `${directionEmoji(scored.direction)} 方向: ${scored.direction} | ${actionBadge(scored.action)}`,
+    `⭐ 综合分: ${formatScore(scored.convictionScore)} ${scoreBadge(scored.convictionScore)} | ${confidenceBadge(scored.confidence)}`,
     "",
     "💰 交易计划",
     `入场: ${scored.entry}`,
@@ -883,7 +1209,7 @@ export function formatTradeIdeaMessage(idea, { marketContext = {}, paperAccount 
     "",
     ...formatProbabilityCalibrationBlock(scored),
     ...(scored.probabilityCalibration ? [""] : []),
-    "🧭 执行触发",
+    "🧭 执行条件",
     executionCondition(scored),
     "",
     ...formatTradePlaybookBlock(scored),
@@ -912,8 +1238,6 @@ export function formatTradeIdeaMessage(idea, { marketContext = {}, paperAccount 
     ...(scored.strategyFeedback ? [""] : []),
     ...formatStrategyStatsBlock(scored),
     ...(scored.strategyStats ? [""] : []),
-    ...formatPaperAccountBlock(paperAccount ?? scored.paperAccount),
-    ...(hasPaperAccount ? [""] : []),
     ...formatStrategyPolicyBlock(scored.strategyPolicy ?? marketContext.strategyPolicy),
     ...(hasPolicy ? [""] : []),
     "",
@@ -932,19 +1256,16 @@ export function formatBestSignalMessage(signal, { paperAccount = null } = {}) {
   if (signal.direction === "WAIT") {
     return [
       "最高置信方向",
-      "动作: WAIT",
+      `动作: ${actionBadge("WAIT")}`,
       `原因: ${signal.summary}`,
       "",
-      ...formatStrategyPolicyBlock(signal.strategyPolicy),
-      ...(signal.strategyPolicy ? [""] : []),
-      ...formatPaperAccountBlock(paperAccount ?? signal.paperAccount)
+      ...formatStrategyPolicyBlock(signal.strategyPolicy)
     ].filter((line, index, lines) => line !== "" || lines[index + 1]).join("\n");
   }
 
   return formatTradeIdeaMessage(signal, {
     title: "最高置信方向",
-    marketContext: signal.marketContext,
-    paperAccount: paperAccount ?? signal.paperAccount
+    marketContext: signal.marketContext
   });
 }
 
@@ -971,9 +1292,7 @@ export function formatMarketReversalMessage(signal, { paperAccount = null } = {}
     "⚠️ 主要风险",
     ...bulletList((signal.risks ?? []).slice(0, 3)),
     "",
-    ...formatStrategyPolicyBlock(signal.strategyPolicy),
-    ...(signal.strategyPolicy ? [""] : []),
-    ...formatPaperAccountBlock(paperAccount ?? signal.paperAccount)
+    ...formatStrategyPolicyBlock(signal.strategyPolicy)
   ].join("\n");
 }
 
@@ -1058,6 +1377,112 @@ export async function sendTradeIdeaNotifications({
   ]);
 
   return { telegram, lark };
+}
+
+export async function sendPaperAccountNotification({
+  paperAccount,
+  reason = "账户更新",
+  token = process.env.TELEGRAM_BOT_TOKEN,
+  chatId = process.env.TELEGRAM_CHAT_ID,
+  messageThreadId = process.env.PAPER_ACCOUNT_TOPIC_ID,
+  fetchImpl = globalThis.fetch
+} = {}) {
+  if (!messageThreadId) {
+    return { ok: false, skipped: true, reason: "missing_paper_account_topic" };
+  }
+
+  const text = formatPaperAccountMessage(paperAccount, { reason });
+  if (!text) {
+    return { ok: false, skipped: true, reason: "missing_paper_account_snapshot" };
+  }
+
+  return sendTelegramMessage({
+    token,
+    chatId,
+    messageThreadId,
+    text,
+    fetchImpl
+  });
+}
+
+export async function sendPaperDailySummaryNotification({
+  paperAccount,
+  reason = "每日自动总结",
+  token = process.env.TELEGRAM_BOT_TOKEN,
+  chatId = process.env.TELEGRAM_CHAT_ID,
+  messageThreadId = process.env.PAPER_DAILY_SUMMARY_TOPIC_ID ?? process.env.PAPER_ACCOUNT_TOPIC_ID,
+  fetchImpl = globalThis.fetch,
+  now = Date.now
+} = {}) {
+  if (!messageThreadId) {
+    return { ok: false, skipped: true, reason: "missing_paper_daily_summary_topic" };
+  }
+
+  const text = formatPaperDailySummaryMessage(paperAccount, { reason, now });
+  if (!text) {
+    return { ok: false, skipped: true, reason: "missing_paper_account_snapshot" };
+  }
+
+  return sendTelegramMessage({
+    token,
+    chatId,
+    messageThreadId,
+    text,
+    fetchImpl,
+    now
+  });
+}
+
+export async function sendStrategyAttributionNotification({
+  attribution,
+  reason = "归因更新",
+  token = process.env.TELEGRAM_BOT_TOKEN,
+  chatId = process.env.TELEGRAM_CHAT_ID,
+  messageThreadId = process.env.STRATEGY_ATTRIBUTION_TOPIC_ID,
+  fetchImpl = globalThis.fetch
+} = {}) {
+  if (!messageThreadId) {
+    return { ok: false, skipped: true, reason: "missing_strategy_attribution_topic" };
+  }
+
+  const text = formatStrategyAttributionMessage(attribution, { reason });
+  if (!text) {
+    return { ok: false, skipped: true, reason: "missing_strategy_attribution_snapshot" };
+  }
+
+  return sendTelegramMessage({
+    token,
+    chatId,
+    messageThreadId,
+    text,
+    fetchImpl
+  });
+}
+
+export async function sendProbabilityCalibrationNotification({
+  calibration,
+  reason = "校准更新",
+  token = process.env.TELEGRAM_BOT_TOKEN,
+  chatId = process.env.TELEGRAM_CHAT_ID,
+  messageThreadId = process.env.PROBABILITY_CALIBRATION_TOPIC_ID,
+  fetchImpl = globalThis.fetch
+} = {}) {
+  if (!messageThreadId) {
+    return { ok: false, skipped: true, reason: "missing_probability_calibration_topic" };
+  }
+
+  const text = formatProbabilityCalibrationMessage(calibration, { reason });
+  if (!text) {
+    return { ok: false, skipped: true, reason: "missing_probability_calibration_snapshot" };
+  }
+
+  return sendTelegramMessage({
+    token,
+    chatId,
+    messageThreadId,
+    text,
+    fetchImpl
+  });
 }
 
 export async function sendTopicStatusNotifications({

@@ -4,6 +4,10 @@ import {
   getDefaultDataStore,
   loadJsonl
 } from "./data-store.js";
+import {
+  isPlannedExitReview,
+  normalizeReviewForStats
+} from "./review-outcome.js";
 
 export function appendSignalMemory({
   filePath,
@@ -111,29 +115,31 @@ function candleHit(previous, candle) {
   return null;
 }
 
-function priceDirectionReview(previous, currentPrice) {
-  const entry = Number(previous.entry);
+function currentPriceHit(previous, currentPrice) {
   const price = Number(currentPrice);
-  const signedMove = previous.direction === "LONG"
-    ? (price - entry) / entry
-    : (entry - price) / entry;
+  const takeProfit = Number(previous.takeProfit);
+  const stopLoss = Number(previous.stopLoss);
 
-  if (Math.abs(signedMove) < 0.001) {
-    return { outcome: "PENDING", label: "观察中", hit: "NONE" };
+  if (previous.direction === "LONG") {
+    if (price >= takeProfit) return { outcome: "RIGHT", label: "对", hit: "TAKE_PROFIT" };
+    if (price <= stopLoss) return { outcome: "WRONG", label: "错", hit: "STOP_LOSS" };
   }
 
-  return signedMove > 0
-    ? { outcome: "RIGHT", label: "对", hit: "MARK_TO_MARKET" }
-    : { outcome: "WRONG", label: "错", hit: "MARK_TO_MARKET" };
+  if (previous.direction === "SHORT") {
+    if (price <= takeProfit) return { outcome: "RIGHT", label: "对", hit: "TAKE_PROFIT" };
+    if (price >= stopLoss) return { outcome: "WRONG", label: "错", hit: "STOP_LOSS" };
+  }
+
+  return { outcome: "PENDING", label: "观察中", hit: "NONE" };
 }
 
 function reviewDetail({ review, previous, currentPrice, pnlPercent }) {
   if (review.hit === "TAKE_PROFIT") return `上次 ${previous.direction} 已触发止盈，本次按对处理。`;
   if (review.hit === "STOP_LOSS") return `上次 ${previous.direction} 已触发止损，本次按错处理。`;
   if (review.hit === "AMBIGUOUS") return "同一根K线同时覆盖止盈和止损，无法判断先后，继续观察。";
-  if (review.outcome === "PENDING") return "当前价接近上次入场价，盈亏方向还不明显。";
+  if (review.outcome === "PENDING") return "尚未触发止盈/止损，继续观察，不计入胜负。";
 
-  return `未触发止盈/止损，按当前价相对入场浮动 ${pnlPercent}% 判断。`;
+  return `尚未触发止盈/止损，当前仅浮动 ${pnlPercent}%，不计入胜负。`;
 }
 
 export function reviewPreviousSignal({ previous, currentPrice, candles = [] } = {}) {
@@ -145,7 +151,7 @@ export function reviewPreviousSignal({ previous, currentPrice, candles = [] } = 
     if (review) break;
   }
 
-  if (!review) review = priceDirectionReview(previous, currentPrice);
+  if (!review) review = currentPriceHit(previous, currentPrice);
 
   const entry = Number(previous.entry);
   const price = Number(currentPrice);
@@ -211,18 +217,21 @@ function finalizePerformanceStats(stats) {
 }
 
 function addReviewToStats(stats, review) {
+  const normalized = normalizeReviewForStats(review);
+  if (!normalized) return;
+
   stats.reviewedSignals += 1;
-  const directionStats = review.previousDirection === "LONG"
+  const directionStats = normalized.previousDirection === "LONG"
     ? stats.long
-    : review.previousDirection === "SHORT"
+    : normalized.previousDirection === "SHORT"
       ? stats.short
       : null;
   if (directionStats) directionStats.reviewed += 1;
 
-  if (review.outcome === "RIGHT") {
+  if (normalized.outcome === "RIGHT") {
     stats.successes += 1;
     if (directionStats) directionStats.successes += 1;
-  } else if (review.outcome === "WRONG") {
+  } else if (normalized.outcome === "WRONG") {
     stats.failures += 1;
     if (directionStats) directionStats.failures += 1;
   } else {
@@ -339,7 +348,7 @@ function feedbackRecords(records, { symbol, direction }) {
     .filter((record) => record.symbol === symbol)
     .map((record) => record.previousSignalReview)
     .filter((review) => review?.previousDirection === direction)
-    .filter((review) => review.outcome === "RIGHT" || review.outcome === "WRONG");
+    .filter(isPlannedExitReview);
 }
 
 function consecutiveOutcomeCount(reviews, outcome) {

@@ -69,6 +69,8 @@ export function positionRiskConfigFromEnv(env = process.env) {
     maxAtrPercent: clamp(numberFromEnv(env, "PAPER_MAX_ATR_PCT", 0.12), 0.005, 1),
     minRiskReward: clamp(numberFromEnv(env, "PAPER_ENGINE_MIN_RR", 1.2), 0.5, 5),
     minQuoteVolume24h: Math.max(0, numberFromEnv(env, "PAPER_MIN_QUOTE_VOLUME_24H", 5_000_000)),
+    hardMinQuoteVolume24h: Math.max(0, numberFromEnv(env, "PAPER_HARD_MIN_QUOTE_VOLUME_24H", 50_000)),
+    hardLowVolumeRatio: clamp(numberFromEnv(env, "PAPER_HARD_LOW_VOLUME_RATIO", 0.25), 0.01, 5),
     lowVolumeRatio: clamp(numberFromEnv(env, "PAPER_LOW_VOLUME_RATIO", 0.65), 0.05, 5)
   };
 }
@@ -141,10 +143,25 @@ function rrMultiplier(idea, config) {
 function liquidityMultiplier(idea, config) {
   const ratio = volumeRatio(idea);
   const quoteVolume = quoteVolume24h(idea);
-  if (ratio < config.lowVolumeRatio) return 0;
-  if (quoteVolume !== null && quoteVolume < config.minQuoteVolume24h) return 0;
-  if (ratio < 0.85) return 0.45;
-  return 1;
+  let multiplier = 1;
+
+  if (quoteVolume !== null && quoteVolume > 0 && quoteVolume < config.hardMinQuoteVolume24h) return 0;
+
+  if (ratio <= 0) multiplier *= 0.55;
+  else if (ratio < config.hardLowVolumeRatio) multiplier *= 0.25;
+  else if (ratio < config.lowVolumeRatio) multiplier *= 0.35;
+  else if (ratio < 0.85) multiplier *= 0.55;
+  else if (ratio < 1) multiplier *= 0.75;
+
+  if (quoteVolume === null || quoteVolume <= 0) {
+    multiplier *= 0.65;
+  } else if (quoteVolume < config.minQuoteVolume24h * 0.25) {
+    multiplier *= 0.45;
+  } else if (quoteVolume < config.minQuoteVolume24h) {
+    multiplier *= 0.65;
+  }
+
+  return clamp(multiplier, 0.12, 1);
 }
 
 function lossStreakMultiplier(streak, config) {
@@ -201,12 +218,12 @@ export function evaluatePositionRisk({
   if (bucketRiskPercent >= riskConfig.sameBucketMaxRiskPercent) blocks.push(`${bucket} 同类风险 ${round(bucketRiskPercent * 100, 2)}% 已达上限`);
   if (multipliers.volatility === 0) blocks.push(`ATR/价格 ${round(atrPercent(idea) * 100, 2)}% 过高`);
   if (multipliers.riskReward === 0) blocks.push(`风险收益比 ${idea?.riskReward ?? "--"} 不足`);
-  if (multipliers.liquidity === 0) blocks.push("流动性不足，禁止开仓");
+  if (multipliers.liquidity === 0) blocks.push("极端低流动性，禁止开仓");
 
   if (multipliers.lossStreak < 1 && multipliers.lossStreak > 0) warnings.push(`连续亏损 ${lossStreak} 次，自动降仓`);
   if (multipliers.volatility < 1 && multipliers.volatility > 0) warnings.push(`波动偏高，仓位缩放 ${round(multipliers.volatility * 100, 0)}%`);
   if (multipliers.confidence < 1) warnings.push(`置信度 ${idea?.confidence ?? "LOW"}，降低风险预算`);
-  if (multipliers.liquidity < 1 && multipliers.liquidity > 0) warnings.push("量能偏弱，降低风险预算");
+  if (multipliers.liquidity < 1 && multipliers.liquidity > 0) warnings.push("流动性偏薄，小资金降仓执行");
 
   const scale = Object.values(multipliers).reduce((product, value) => product * value, 1);
   const riskFraction = riskConfig.enabled ? clamp(baseRisk * scale, 0, riskConfig.maxRiskPerTrade) : finite(config.riskPerTrade, 0.005);

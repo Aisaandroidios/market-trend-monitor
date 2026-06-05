@@ -1,3 +1,8 @@
+import {
+  hasReviewOutcome,
+  normalizeReviewForStats
+} from "./review-outcome.js";
+
 function clamp(value, min = 0, max = 1) {
   return Math.min(Math.max(value, min), max);
 }
@@ -62,11 +67,12 @@ function addSignal(bucket, record) {
 }
 
 function addReview(bucket, review) {
-  if (!review?.outcome) return;
+  const normalized = normalizeReviewForStats(review);
+  if (!normalized) return;
 
   bucket.reviewed += 1;
-  if (review.outcome === "RIGHT") bucket.successes += 1;
-  else if (review.outcome === "WRONG") bucket.failures += 1;
+  if (normalized.outcome === "RIGHT") bucket.successes += 1;
+  else if (normalized.outcome === "WRONG") bucket.failures += 1;
   else bucket.pending += 1;
 }
 
@@ -212,7 +218,7 @@ function actionableSignal(record) {
 
 function reviewedSignal(record) {
   const review = record?.previousSignalReview;
-  return review?.outcome && ["RIGHT", "WRONG", "PENDING"].includes(review.outcome);
+  return hasReviewOutcome(review);
 }
 
 function closedPaperTrade(trade) {

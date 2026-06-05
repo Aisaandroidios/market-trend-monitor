@@ -141,6 +141,7 @@ function isExecutableCandidate(idea, config, strategyPolicy = null) {
   if (!idea || !["LONG", "SHORT"].includes(idea.direction)) return false;
   if (![actionForDirection(idea.direction), "BUY", "SELL"].includes(idea.action)) return false;
   if (!plannedLevels(idea)) return false;
+  if (config.requireDataSource && !idea.dataSource && !idea.currentQuote?.source) return false;
 
   const thresholds = effectiveThresholds(config, strategyPolicy);
   const convictionScore = finiteNumber(idea.convictionScore, 0);
@@ -250,6 +251,19 @@ function buildStats(state, now) {
   };
 }
 
+function dailySummarySource(state, now) {
+  const currentDate = beijingDateParts(now).date;
+  const onCurrentDate = (value) => value && beijingDateParts(value).date === currentDate;
+
+  return {
+    date: currentDate,
+    closedTrades: state.closedTrades.filter((trade) => onCurrentDate(trade.closedAt)),
+    openedEntries: state.openHistory.filter((entry) => onCurrentDate(entry.openedAt)),
+    riskEvents: state.riskEvents.filter((event) => onCurrentDate(event.evaluatedAt)),
+    equityCurve: state.equityCurve.filter((row) => onCurrentDate(row.at))
+  };
+}
+
 function createInitialState(config) {
   return {
     version: 2,
@@ -269,9 +283,46 @@ function createInitialState(config) {
   };
 }
 
+function historyEntryFromPosition(position) {
+  return {
+    id: position.id,
+    status: position.status ?? "OPEN",
+    symbol: position.symbol,
+    direction: position.direction,
+    action: position.action,
+    openedAt: position.openedAt,
+    entryPrice: position.entryPrice,
+    takeProfit: position.takeProfit,
+    stopLoss: position.stopLoss,
+    quantity: position.quantity,
+    notional: position.notional,
+    riskAmount: position.riskAmount,
+    riskFraction: position.riskFraction,
+    riskBucket: position.riskBucket,
+    riskReward: position.riskReward,
+    convictionScore: position.convictionScore,
+    confidence: position.confidence,
+    winProbability: position.winProbability,
+    dataSource: position.dataSource,
+    tradePlaybook: position.tradePlaybook,
+    reason: position.reason,
+    closedAt: position.closedAt,
+    closeReason: position.closeReason,
+    exitPrice: position.exitPrice,
+    netPnl: position.netPnl,
+    returnPercent: position.returnPercent
+  };
+}
+
 function normalizeState(raw, config) {
   const fallback = createInitialState(config);
   if (!raw || typeof raw !== "object") return fallback;
+  const openPositions = Array.isArray(raw.openPositions) ? raw.openPositions : [];
+  const closedTrades = Array.isArray(raw.closedTrades) ? raw.closedTrades : [];
+  const backfilledOpenHistory = [
+    ...closedTrades.map(historyEntryFromPosition),
+    ...openPositions.map(historyEntryFromPosition)
+  ];
 
   return {
     ...fallback,
@@ -282,9 +333,9 @@ function normalizeState(raw, config) {
     peakEquity: finiteNumber(raw.peakEquity, config.initialBalance),
     maxDrawdownPercent: finiteNumber(raw.maxDrawdownPercent, 0),
     nextPositionId: Math.max(1, Math.trunc(finiteNumber(raw.nextPositionId, 1))),
-    openPositions: Array.isArray(raw.openPositions) ? raw.openPositions : [],
-    openHistory: Array.isArray(raw.openHistory) ? raw.openHistory.slice(-500) : [],
-    closedTrades: Array.isArray(raw.closedTrades) ? raw.closedTrades : [],
+    openPositions,
+    openHistory: Array.isArray(raw.openHistory) ? raw.openHistory.slice(-500) : backfilledOpenHistory.slice(-500),
+    closedTrades,
     riskEvents: Array.isArray(raw.riskEvents) ? raw.riskEvents.slice(-200) : [],
     equityCurve: Array.isArray(raw.equityCurve) ? raw.equityCurve.slice(-500) : []
   };
@@ -534,6 +585,7 @@ export function paperAccountConfigFromEnv(env = process.env) {
     dataStoreMode: env.DATA_STORE ?? env.STORAGE_BACKEND ?? "auto",
     sqlitePath: env.SQLITE_DB_PATH ?? path.join(process.cwd(), "data", "market-monitor.sqlite"),
     requireExecute: boolFromEnv(env.PAPER_REQUIRE_EXECUTE, false),
+    requireDataSource: boolFromEnv(env.PAPER_REQUIRE_DATA_SOURCE, true),
     feeRate: 0,
     slippageBps: 0
   };
@@ -568,6 +620,7 @@ export function createPaperAccount(config = paperAccountConfigFromEnv()) {
       recentClosedTrades: state.closedTrades.slice(-30).reverse(),
       recentRiskEvents: state.riskEvents.slice(-30).reverse(),
       equityCurve: state.equityCurve.slice(-200),
+      dailySummary: dailySummarySource(state, now),
       stats,
       config: {
         riskPerTrade: config.riskPerTrade,
@@ -580,6 +633,7 @@ export function createPaperAccount(config = paperAccountConfigFromEnv()) {
         adaptiveThresholds: config.adaptiveThresholds,
         positionRisk: config.positionRisk,
         requireExecute: config.requireExecute,
+        requireDataSource: config.requireDataSource,
         feeRate: config.feeRate,
         slippageBps: config.slippageBps
       },

@@ -25,7 +25,11 @@ import {
   sendCompleteTopicNotification,
   sendBestSignalNotifications,
   sendMarketReversalNotifications,
+  sendPaperAccountNotification,
+  sendPaperDailySummaryNotification,
+  sendProbabilityCalibrationNotification,
   sendSignalNotifications,
+  sendStrategyAttributionNotification,
   sendTradeIdeaNotifications,
   sendTopicStatusNotifications
 } from "./notifiers.js";
@@ -180,6 +184,144 @@ function enabledFromEnv(value, fallback = true) {
   return !["0", "false", "no", "off"].includes(String(value).trim().toLowerCase());
 }
 
+function parseDailyTime(value = "08:30") {
+  const match = String(value).trim().match(/^(\d{1,2})(?::(\d{1,2}))?$/);
+  if (!match) return { hour: 8, minute: 30 };
+  const hour = Math.min(Math.max(Number(match[1]), 0), 23);
+  const minute = Math.min(Math.max(Number(match[2] ?? 0), 0), 59);
+  return { hour, minute };
+}
+
+export function nextPaperDailySummaryDelayMs({ now = new Date(), time = "08:30" } = {}) {
+  const nowMs = now instanceof Date ? now.getTime() : Number(new Date(now));
+  const { hour, minute } = parseDailyTime(time);
+  const beijingOffsetMs = 8 * 60 * 60 * 1000;
+  const beijingNowMs = nowMs + beijingOffsetMs;
+  const beijingNow = new Date(beijingNowMs);
+  let targetBeijingMs = Date.UTC(
+    beijingNow.getUTCFullYear(),
+    beijingNow.getUTCMonth(),
+    beijingNow.getUTCDate(),
+    hour,
+    minute,
+    0,
+    0
+  );
+
+  if (targetBeijingMs <= beijingNowMs) {
+    targetBeijingMs += 24 * 60 * 60 * 1000;
+  }
+
+  return targetBeijingMs - beijingNowMs;
+}
+
+export function paperAccountTopicStateKey(snapshot) {
+  if (!snapshot?.enabled) return "disabled";
+  const openKey = (snapshot.openPositions ?? [])
+    .map((position) => [
+      position.id,
+      position.symbol,
+      position.direction,
+      position.entryPrice,
+      position.takeProfit,
+      position.stopLoss
+    ].join(":"))
+    .join("|");
+  const lastHistory = (snapshot.recentOpenHistory ?? [])[0];
+
+  return [
+    snapshot.openPositionCount ?? 0,
+    snapshot.openHistoryCount ?? 0,
+    snapshot.closedTradeCount ?? 0,
+    openKey,
+    lastHistory?.id ?? "none",
+    lastHistory?.status ?? "none",
+    lastHistory?.closeReason ?? "none"
+  ].join("::");
+}
+
+export function strategyAttributionTopicStateKey(attribution) {
+  if (!attribution?.total) return "empty";
+  const total = attribution.total ?? {};
+  const bucketKey = (bucket) => [
+    bucket.key ?? bucket.label,
+    bucket.successes ?? 0,
+    bucket.failures ?? 0,
+    bucket.paperTrades ?? 0,
+    bucket.paperWins ?? 0,
+    bucket.paperLosses ?? 0,
+    Number(bucket.netPnl ?? 0).toFixed(2),
+    Number(bucket.score ?? 0).toFixed(3),
+    Number(bucket.sampleScore ?? 0).toFixed(3)
+  ].join(":");
+
+  return [
+    total.reviewed ?? 0,
+    total.successes ?? 0,
+    total.failures ?? 0,
+    total.pending ?? 0,
+    total.paperTrades ?? 0,
+    total.paperWins ?? 0,
+    total.paperLosses ?? 0,
+    total.paperBreakeven ?? 0,
+    Number(total.netPnl ?? 0).toFixed(2),
+    Number(total.score ?? 0).toFixed(3),
+    Number(total.sampleScore ?? 0).toFixed(3),
+    (attribution.strengths ?? []).slice(0, 5).map(bucketKey).join("|"),
+    (attribution.weaknesses ?? []).slice(0, 5).map(bucketKey).join("|"),
+    (attribution.recommendations ?? []).slice(0, 4).join("|"),
+    (attribution.policyHints?.boost ?? []).join(","),
+    (attribution.policyHints?.reduce ?? []).join(","),
+    (attribution.policyHints?.avoidSymbols ?? []).join(",")
+  ].join("::");
+}
+
+export function probabilityCalibrationTopicStateKey(calibration) {
+  if (!calibration?.overall) return "empty";
+  const overall = calibration.overall ?? {};
+  const bucketKey = (bucket) => [
+    bucket.key,
+    bucket.samples ?? 0,
+    bucket.successes ?? 0,
+    bucket.failures ?? 0,
+    Number(bucket.predictedAvg ?? 0).toFixed(2),
+    Number(bucket.realizedRate ?? 0).toFixed(2),
+    Number(bucket.calibrationError ?? 0).toFixed(2),
+    Number(bucket.reliability ?? 0).toFixed(3)
+  ].join(":");
+  const directionKey = (direction) => [
+    direction?.samples ?? 0,
+    direction?.successes ?? 0,
+    direction?.failures ?? 0,
+    Number(direction?.realizedRate ?? 0).toFixed(2)
+  ].join(":");
+  const symbolKey = (symbol) => [
+    symbol.symbol,
+    symbol.samples ?? 0,
+    symbol.successes ?? 0,
+    symbol.failures ?? 0,
+    Number(symbol.predictedAvg ?? 0).toFixed(2),
+    Number(symbol.realizedRate ?? 0).toFixed(2)
+  ].join(":");
+
+  return [
+    calibration.status ?? "unknown",
+    calibration.bucketSize ?? "unknown",
+    overall.samples ?? 0,
+    overall.successes ?? 0,
+    overall.failures ?? 0,
+    Number(overall.predictedAvg ?? 0).toFixed(2),
+    Number(overall.realizedRate ?? 0).toFixed(2),
+    Number(overall.overconfidence ?? 0).toFixed(2),
+    Number(overall.expectedCalibrationError ?? 0).toFixed(2),
+    Number(overall.brierScore ?? 0).toFixed(4),
+    (calibration.buckets ?? []).slice(0, 12).map(bucketKey).join("|"),
+    directionKey(calibration.directions?.long),
+    directionKey(calibration.directions?.short),
+    (calibration.symbols ?? []).slice(0, 12).map(symbolKey).join("|")
+  ].join("::");
+}
+
 function sendJson(response, statusCode, body) {
   response.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
@@ -217,6 +359,8 @@ export function createHttpServer({
   startDecisionEngine = true,
   startOpportunityScanner = enabledFromEnv(process.env.OPPORTUNITY_SCAN_ENABLED, true),
   startTelegramCommands = true,
+  startPaperDailySummary = enabledFromEnv(process.env.PAPER_DAILY_SUMMARY_ENABLED, true),
+  paperDailySummaryTime = process.env.PAPER_DAILY_SUMMARY_TIME ?? "08:30",
   decisionSymbols = defaultDecisionSymbols,
   telegramTopicMap = parseTelegramTopicMap(),
   activeCryptoLimit = Number(process.env.ACTIVE_CRYPTO_LIMIT ?? 8),
@@ -242,8 +386,14 @@ export function createHttpServer({
   let latestScoredTradeIdeas = [];
   let latestStrategyPolicy = null;
   let latestStorageInfo = defaultDataStoreInfo();
-  let latestPerformanceAttribution = buildPerformanceAttribution();
-  let latestProbabilityCalibration = buildProbabilityCalibration();
+  let latestPerformanceAttribution = buildPerformanceAttribution({
+    signalRecords: loadSignalMemory(),
+    paperTrades: getDefaultDataStore().loadPaperTrades?.() ?? [],
+    now: Date.now()
+  });
+  let latestProbabilityCalibration = buildProbabilityCalibration(loadSignalMemory(), {
+    now: Date.now()
+  });
   let latestModelGovernance = buildModelGovernance();
   let latestLongTermRegime = null;
   let latestPythonModelBrainStatus = {
@@ -254,15 +404,20 @@ export function createHttpServer({
   const lastDirections = new Map();
   const lastTopicStatusHeartbeats = new Map();
   const lastOpportunityAlerts = new Map();
+  let lastPaperAccountTopicKey = paperAccountTopicStateKey(latestPaperAccountSnapshot);
+  let lastStrategyAttributionTopicKey = strategyAttributionTopicStateKey(latestPerformanceAttribution);
+  let lastProbabilityCalibrationTopicKey = probabilityCalibrationTopicStateKey(latestProbabilityCalibration);
   let stopMarketStream = () => {};
   let stopStooqPoller = () => {};
   let stopTelegramCommands = () => {};
   let decisionTimer = null;
   let opportunityScanTimer = null;
+  let paperDailySummaryTimer = null;
   let decisionWarmupTimer = null;
   let decisionRunInFlight = false;
   let decisionLoopStopped = false;
   let opportunityScanLoopStopped = false;
+  let paperDailySummaryLoopStopped = false;
   let latestDecisionSchedule = decisionIntervalForUsMarketSession({
     now: decisionNow(),
     ...decisionScheduleConfig
@@ -295,6 +450,67 @@ export function createHttpServer({
   function currentTradeIdeaMap() {
     if (latestScoredTradeIdeas.length === 0) return tradeIdeas;
     return new Map(latestScoredTradeIdeas.map((idea) => [idea.symbol, idea]));
+  }
+
+  async function maybeSendPaperAccountTopic({ reason = "账户更新", force = false } = {}) {
+    if (!latestPaperAccountSnapshot?.enabled) return null;
+    if (!process.env.PAPER_ACCOUNT_TOPIC_ID) return null;
+
+    const stateKey = paperAccountTopicStateKey(latestPaperAccountSnapshot);
+    const changed = stateKey !== lastPaperAccountTopicKey;
+    if (!force && !changed) return null;
+
+    const telegram = await sendPaperAccountNotification({
+      paperAccount: latestPaperAccountSnapshot,
+      reason
+    });
+    if (telegram?.ok) {
+      lastPaperAccountTopicKey = stateKey;
+    }
+    return telegram;
+  }
+
+  async function maybeSendStrategyAttributionTopic({ reason = "归因更新", force = false } = {}) {
+    if (!process.env.STRATEGY_ATTRIBUTION_TOPIC_ID) return null;
+
+    const stateKey = strategyAttributionTopicStateKey(latestPerformanceAttribution);
+    const changed = stateKey !== lastStrategyAttributionTopicKey;
+    if (!force && !changed) return null;
+
+    const telegram = await sendStrategyAttributionNotification({
+      attribution: latestPerformanceAttribution,
+      reason
+    });
+    if (telegram?.ok) {
+      lastStrategyAttributionTopicKey = stateKey;
+    }
+    return telegram;
+  }
+
+  async function maybeSendProbabilityCalibrationTopic({ reason = "校准更新", force = false } = {}) {
+    if (!process.env.PROBABILITY_CALIBRATION_TOPIC_ID) return null;
+
+    const stateKey = probabilityCalibrationTopicStateKey(latestProbabilityCalibration);
+    const changed = stateKey !== lastProbabilityCalibrationTopicKey;
+    if (!force && !changed) return null;
+
+    const telegram = await sendProbabilityCalibrationNotification({
+      calibration: latestProbabilityCalibration,
+      reason
+    });
+    if (telegram?.ok) {
+      lastProbabilityCalibrationTopicKey = stateKey;
+    }
+    return telegram;
+  }
+
+  async function sendPaperDailySummary({ reason = "每日自动总结", now = Date.now } = {}) {
+    latestPaperAccountSnapshot = paperAccount.snapshot?.(typeof now === "function" ? now() : now) ?? latestPaperAccountSnapshot;
+    return sendPaperDailySummaryNotification({
+      paperAccount: latestPaperAccountSnapshot,
+      reason,
+      now
+    });
   }
 
   function scoreTradeIdeaSnapshot(marketContext) {
@@ -351,6 +567,7 @@ export function createHttpServer({
         error: error.message
       };
     }
+    maybeSendPaperAccountTopic({ reason: "模拟账户更新" }).catch(() => {});
 
     const marketReversalSignal = buildMarketReversalSignal({
       previousContext: lastMarketContext,
@@ -575,6 +792,7 @@ export function createHttpServer({
     latestProbabilityCalibration = buildProbabilityCalibration(signalMemoryRecords, {
       now: Date.now()
     });
+    maybeSendProbabilityCalibrationTopic({ reason: "胜率校准更新" }).catch(() => {});
     latestModelGovernance = buildModelGovernance({
       signalRecords: signalMemoryRecords,
       probabilityCalibration: latestProbabilityCalibration,
@@ -586,6 +804,7 @@ export function createHttpServer({
       paperTrades,
       now: Date.now()
     });
+    maybeSendStrategyAttributionTopic({ reason: "策略归因更新" }).catch(() => {});
     const longTermRegimeBySymbol = new Map();
     const externalModelSignals = loadExternalModelSignals();
 
@@ -874,6 +1093,15 @@ export function createHttpServer({
     opportunityScanTimer = setTimeout(runScheduledOpportunityScan, schedule.delayMs ?? schedule.intervalMs);
   }
 
+  function scheduleNextPaperDailySummary() {
+    if (!startPaperDailySummary || paperDailySummaryLoopStopped) return;
+    const delayMs = nextPaperDailySummaryDelayMs({
+      now: decisionNow(),
+      time: paperDailySummaryTime
+    });
+    paperDailySummaryTimer = setTimeout(runScheduledPaperDailySummary, delayMs);
+  }
+
   async function runScheduledDecision() {
     if (decisionLoopStopped) return;
     await runDecisionEvaluation({ pushMode: "complete" });
@@ -884,6 +1112,17 @@ export function createHttpServer({
     if (opportunityScanLoopStopped) return;
     await runDecisionEvaluation({ pushMode: "scan" });
     scheduleNextOpportunityScan();
+  }
+
+  async function runScheduledPaperDailySummary() {
+    if (paperDailySummaryLoopStopped) return;
+    try {
+      await sendPaperDailySummary({ reason: "每日自动总结" });
+    } catch {
+      // A failed daily Telegram push should not stop the scheduler.
+    } finally {
+      scheduleNextPaperDailySummary();
+    }
   }
 
   function startDecisionLoop() {
@@ -1111,6 +1350,11 @@ export function createHttpServer({
       startOpportunityScanLoop();
     }
 
+    if (startPaperDailySummary) {
+      paperDailySummaryLoopStopped = false;
+      scheduleNextPaperDailySummary();
+    }
+
     if (startTelegramCommands) {
       stopTelegramCommands = createTelegramCommandPoller({
         topicMap: telegramTopicMap,
@@ -1125,9 +1369,11 @@ export function createHttpServer({
     stopTelegramCommands();
     decisionLoopStopped = true;
     opportunityScanLoopStopped = true;
+    paperDailySummaryLoopStopped = true;
     if (decisionWarmupTimer) clearTimeout(decisionWarmupTimer);
     if (decisionTimer) clearTimeout(decisionTimer);
     if (opportunityScanTimer) clearTimeout(opportunityScanTimer);
+    if (paperDailySummaryTimer) clearTimeout(paperDailySummaryTimer);
     for (const client of clients) {
       client.end();
     }

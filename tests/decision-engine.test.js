@@ -90,7 +90,7 @@ test("fetches Binance futures 24h stats from backup base URLs", async () => {
   assert.deepEqual(stats.map((item) => item.symbol), ["BTCUSDT", "MRVLUSDT"]);
 });
 
-test("builds a long trade idea when trend and momentum align", () => {
+test("builds a long trade idea and waits when reward does not justify entry", () => {
   const candles = Array.from({ length: 80 }, (_, index) => {
     const close = 100 + index;
     return {
@@ -121,11 +121,12 @@ test("builds a long trade idea when trend and momentum align", () => {
   });
 
   assert.equal(idea.direction, "LONG");
-  assert.equal(idea.action, "BUY");
+  assert.equal(idea.action, "WAIT");
   assert.ok(idea.winProbability >= 0.6);
   assert.ok(idea.takeProfit > idea.entry);
   assert.ok(idea.stopLoss < idea.entry);
-  assert.ok(idea.riskReward >= 1);
+  assert.ok(idea.riskReward < 1.15);
+  assert.equal(idea.tradePlaybook.decision, "WAIT_FOR_BETTER_ENTRY");
   assert.equal(idea.support, 99);
   assert.equal(idea.resistance, 180);
   assert.deepEqual(idea.dataSource, {
@@ -207,7 +208,7 @@ test("adds a professional trade playbook to actionable ideas", () => {
   assert.ok(idea.tradePlaybook.checks.some((check) => check.name === "位置性价比"));
 });
 
-test("builds a short trade idea when downtrend and momentum align", () => {
+test("builds a short trade idea and waits when reward does not justify entry", () => {
   const candles = Array.from({ length: 80 }, (_, index) => {
     const close = 200 - index;
     return {
@@ -231,9 +232,11 @@ test("builds a short trade idea when downtrend and momentum align", () => {
   });
 
   assert.equal(idea.direction, "SHORT");
-  assert.equal(idea.action, "SELL");
+  assert.equal(idea.action, "WAIT");
   assert.ok(idea.takeProfit < idea.entry);
   assert.ok(idea.stopLoss > idea.entry);
+  assert.ok(idea.riskReward < 1.15);
+  assert.equal(idea.tradePlaybook.decision, "WAIT_FOR_BETTER_ENTRY");
 });
 
 test("fetches Binance futures candles from USD-M endpoint", async () => {

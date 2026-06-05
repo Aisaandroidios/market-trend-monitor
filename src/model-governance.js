@@ -1,3 +1,5 @@
+import { isPlannedExitReview } from "./review-outcome.js";
+
 function round(value, digits = 2) {
   const number = Number(value);
   if (!Number.isFinite(number)) return 0;
@@ -10,6 +12,7 @@ function clamp(value, min = 0, max = 1) {
 
 function resolvedReviews(records = []) {
   return records
+    .filter((record) => isPlannedExitReview(record.previousSignalReview))
     .map((record) => ({
       symbol: record.symbol,
       direction: record.previousSignalReview?.previousDirection ?? record.direction,
@@ -19,8 +22,7 @@ function resolvedReviews(records = []) {
       confidence: record.confidence,
       modelConfidence: record.modelBrain?.confidence,
       modelScore: record.modelBrain?.score
-    }))
-    .filter((row) => row.outcome === "RIGHT" || row.outcome === "WRONG");
+    }));
 }
 
 function windowStats(reviews, size) {
