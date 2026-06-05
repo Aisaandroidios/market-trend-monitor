@@ -817,7 +817,7 @@ function formatOpenPnlLine(position) {
 }
 
 function formatClosedPnlLine(entry) {
-  return `${pnlBadge(entry?.netPnl)} PnL ${formatCurrency(entry?.netPnl)} | 回报 ${formatOptionalStatsRate(entry?.returnPercent)}`;
+  return `${pnlBadge(entry?.netPnl)} 仓位盈亏 ${formatCurrency(entry?.netPnl)} | 盈亏率 ${formatOptionalStatsRate(entry?.returnPercent)}`;
 }
 
 function pnlBadge(value) {
@@ -878,9 +878,30 @@ function dailyTradeStats(trades = []) {
   return stats;
 }
 
-export function formatPaperAccountMessage(paperAccount, { reason = "账户更新" } = {}) {
+function todayClosedPaperHistory(paperAccount, dateKey) {
+  const openHistoryById = new Map((paperAccount.recentOpenHistory ?? [])
+    .filter((entry) => entry?.id)
+    .map((entry) => [entry.id, entry]));
+  const enrich = (trade) => ({
+    ...(openHistoryById.get(trade?.id) ?? {}),
+    ...trade
+  });
+
+  const dailySource = paperAccount.dailySummary?.date === dateKey ? paperAccount.dailySummary : null;
+  if (Array.isArray(dailySource?.closedTrades)) return dailySource.closedTrades.map(enrich);
+
+  const recentClosed = Array.isArray(paperAccount.recentClosedTrades) ? paperAccount.recentClosedTrades : [];
+  if (recentClosed.length) return dailyPaperRows(recentClosed, dateKey, "closedAt").map(enrich);
+
+  return dailyPaperRows(paperAccount.recentOpenHistory ?? [], dateKey, "closedAt")
+    .filter((entry) => entry.status === "CLOSED")
+    .map(enrich);
+}
+
+export function formatPaperAccountMessage(paperAccount, { reason = "账户更新", now = Date.now } = {}) {
   if (!paperAccount?.enabled) return "";
 
+  const dateKey = formatBeijingDate(now);
   const total = paperAccount.stats?.total ?? {};
   const day = paperAccount.stats?.periods?.day ?? {};
   const week = paperAccount.stats?.periods?.week ?? {};
@@ -889,7 +910,7 @@ export function formatPaperAccountMessage(paperAccount, { reason = "账户更新
   const pnl = Number(paperAccount.equity ?? 0) - Number(paperAccount.initialBalance ?? 0);
   const openPositions = paperAccount.openPositions ?? [];
   const lastRiskEvent = paperAccount.recentRiskEvents?.[0];
-  const history = paperAccount.recentOpenHistory ?? [];
+  const todayHistory = todayClosedPaperHistory(paperAccount, dateKey);
   const positionLines = openPositions.length === 0
     ? ["当前持仓: 无"]
     : [
@@ -901,17 +922,21 @@ export function formatPaperAccountMessage(paperAccount, { reason = "账户更新
           `${formatOpenPnlLine(position)} | 风险 ${formatCurrency(position.riskAmount)} | RR ${position.riskReward}`
         ])
       ];
-  const historyLines = history.length
-    ? history.slice(0, 5).flatMap((entry) => {
-        const closed = entry.status === "CLOSED";
-        return [
-          `${closed ? pnlBadge(entry.netPnl) : "🟢"} ${entry.symbol} ${entry.direction} | ${entry.status}`,
-          `入场 ${entry.entryPrice} | TP ${entry.takeProfit} | SL ${entry.stopLoss}`,
-          formatCapitalRiskLine(entry),
-          closed ? formatClosedPnlLine(entry) : null
-        ].filter(Boolean);
-      })
-    : ["开仓历史: 暂无"];
+  const historyLines = todayHistory.length
+    ? [
+        `今日已平仓: ${todayHistory.length}`,
+        ...todayHistory.slice(0, 6).flatMap((entry) => {
+          const closed = entry.status === "CLOSED" || entry.closedAt;
+          return [
+            `${pnlBadge(entry.netPnl)} ${entry.symbol} ${entry.direction} | ${entry.closeReason ?? entry.status ?? "CLOSED"}`,
+            `入场 ${entry.entryPrice ?? "--"} | 出场 ${entry.exitPrice ?? "--"} | TP ${entry.takeProfit ?? "--"} | SL ${entry.stopLoss ?? "--"}`,
+            formatCapitalRiskLine(entry),
+            closed ? formatClosedPnlLine(entry) : null
+          ].filter(Boolean);
+        }),
+        todayHistory.length > 6 ? `更多 ${todayHistory.length - 6} 笔历史仓位已保留在系统内` : null
+      ].filter(Boolean)
+    : ["今日平仓历史: 暂无"];
   const positionRisk = paperAccount.config?.positionRisk ?? {};
   const highQualityCap = positionRisk.highQualityRiskEnabled
     ? ` | 高性价比上限 ${formatStatsRate((positionRisk.highQualityMaxRiskPerTrade ?? positionRisk.maxRiskPerTrade ?? 0) * 100)}`
@@ -943,7 +968,7 @@ export function formatPaperAccountMessage(paperAccount, { reason = "账户更新
     "📍 当前持仓",
     ...positionLines,
     "",
-    "🧾 开仓历史",
+    "🧾 今日历史仓位",
     ...historyLines
   ]);
 }
@@ -1434,13 +1459,14 @@ export async function sendPaperAccountNotification({
   token = process.env.TELEGRAM_BOT_TOKEN,
   chatId = process.env.TELEGRAM_CHAT_ID,
   messageThreadId = process.env.PAPER_ACCOUNT_TOPIC_ID,
-  fetchImpl = globalThis.fetch
+  fetchImpl = globalThis.fetch,
+  now = Date.now
 } = {}) {
   if (!messageThreadId) {
     return { ok: false, skipped: true, reason: "missing_paper_account_topic" };
   }
 
-  const text = formatPaperAccountMessage(paperAccount, { reason });
+  const text = formatPaperAccountMessage(paperAccount, { reason, now });
   if (!text) {
     return { ok: false, skipped: true, reason: "missing_paper_account_snapshot" };
   }
@@ -1450,7 +1476,8 @@ export async function sendPaperAccountNotification({
     chatId,
     messageThreadId,
     text,
-    fetchImpl
+    fetchImpl,
+    now
   });
 }
 

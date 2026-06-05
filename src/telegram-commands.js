@@ -177,7 +177,7 @@ export function buildTopicReply({
   }
 
   if (command === "positions") {
-    return formatPaperAccountMessage(snapshot.paperAccount, { reason: "命令查询" }) || "模拟账户暂无数据。";
+    return formatPaperAccountMessage(snapshot.paperAccount, { reason: "命令查询", now }) || "模拟账户暂无数据。";
   }
 
   if (command === "daily") {
