@@ -192,7 +192,7 @@ ALPACA_DATA_FEED=iex
 
 ## 模拟实盘账户
 
-模拟账户只用于验证系统信号表现，不连接真实交易所账号，也不会发真实订单。默认配置使用虚拟本金 10000，最多 6 个模拟持仓。基础风险参数仍可设为 2%，但仓位引擎会把有效单笔风险按专业风控默认限制在 0.25%-1%：
+模拟账户只用于验证系统信号表现，不连接真实交易所账号，也不会发真实订单。默认配置使用虚拟本金 10000，最多 6 个模拟持仓。基础风险参数仍可设为 2%；普通合格信号会按专业风控默认限制在 0.25%-1%，只有 HIGH 置信、综合分高、RR 高、胜率高、执行检查好且流动性正常的高性价比信号，才允许使用最高 2% 的模拟风险预算：
 
 ```env
 PAPER_TRADING_ENABLED=true
@@ -205,12 +205,20 @@ PAPER_SLIPPAGE_BPS=0
 PAPER_POSITION_RISK_ENABLED=true
 PAPER_MIN_RISK_PER_TRADE=0.0025
 PAPER_MAX_RISK_PER_TRADE=0.01
+PAPER_HIGH_QUALITY_RISK_ENABLED=true
+PAPER_HIGH_QUALITY_MAX_RISK_PER_TRADE=0.02
+PAPER_HIGH_QUALITY_MIN_CONVICTION=84
+PAPER_HIGH_QUALITY_MIN_RR=2.2
+PAPER_HIGH_QUALITY_MIN_WIN_PROBABILITY=0.65
+PAPER_HIGH_QUALITY_MIN_PLAYBOOK_SCORE=0.75
+PAPER_HIGH_QUALITY_MIN_VOLUME_RATIO=1
+PAPER_HIGH_QUALITY_MIN_QUOTE_VOLUME_24H=5000000
 PAPER_DAILY_MAX_LOSS_PCT=0.03
 PAPER_WEEKLY_MAX_LOSS_PCT=0.07
 PAPER_MAX_CONSECUTIVE_LOSSES=4
 ```
 
-系统会在每轮信号计算后，用当前入场、止盈、止损更新虚拟持仓。命中止盈/止损或出现同标的反向高置信信号时，模拟账户会平仓并记录盈亏。新开仓前会检查日/周亏损、连续亏损、同类资产风险、ATR/价格、成交量倍率和风险收益比；不合格的单会被记录为 `recentRiskEvents`。按当前需求，手续费、滑点和资金费率不参与模拟记账。
+系统会在每轮信号计算后，用当前入场、止盈、止损更新虚拟持仓。命中止盈/止损或出现同标的反向高置信信号时，模拟账户会平仓并记录盈亏。新开仓前会检查日/周亏损、连续亏损、同类资产风险、ATR/价格、成交量倍率和风险收益比；不合格的单会被记录为 `recentRiskEvents`。同类资产风险会按“开仓后风险”投前检查，高性价比信号放大仓位也不能突破同类风险上限。按当前需求，手续费、滑点和资金费率不参与模拟记账。
 
 小资金账户的流动性规则采用“软降仓”为主：`PAPER_MIN_QUOTE_VOLUME_24H` 和 `PAPER_LOW_VOLUME_RATIO` 低于阈值时会明显降低风险预算，不会直接禁止开仓。只有绝对成交额低于 `PAPER_HARD_MIN_QUOTE_VOLUME_24H` 的极端低流动性场景才会硬拦截；`PAPER_HARD_LOW_VOLUME_RATIO` 这类相对量能异常只用于进一步压低仓位。
 

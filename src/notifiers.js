@@ -869,8 +869,12 @@ export function formatPaperAccountMessage(paperAccount, { reason = "账户更新
         `入场 ${entry.entryPrice} | TP ${entry.takeProfit} | SL ${entry.stopLoss}${entry.status === "CLOSED" ? ` | PnL ${formatCurrency(entry.netPnl)}` : ""}`
       ])
     : ["开仓历史: 暂无"];
+  const positionRisk = paperAccount.config?.positionRisk ?? {};
+  const highQualityCap = positionRisk.highQualityRiskEnabled
+    ? ` | 高性价比上限 ${formatStatsRate((positionRisk.highQualityMaxRiskPerTrade ?? positionRisk.maxRiskPerTrade ?? 0) * 100)}`
+    : "";
   const riskLines = [
-    `仓位引擎: ${paperAccount.config?.positionRisk?.enabled ? "开启" : "关闭"} | 单笔上限 ${formatStatsRate((paperAccount.config?.positionRisk?.maxRiskPerTrade ?? 0) * 100)}`,
+    `仓位引擎: ${positionRisk.enabled ? "开启" : "关闭"} | 普通上限 ${formatStatsRate((positionRisk.maxRiskPerTrade ?? 0) * 100)}${highQualityCap}`,
     lastRiskEvent ? `最近拦截: ${lastRiskEvent.skippedSymbol ?? lastRiskEvent.symbol} | ${lastRiskEvent.summary}` : null
   ].filter(Boolean);
 

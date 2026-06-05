@@ -54,10 +54,21 @@ export function assetRiskBucket(symbol) {
 }
 
 export function positionRiskConfigFromEnv(env = process.env) {
+  const maxRiskPerTrade = clamp(numberFromEnv(env, "PAPER_MAX_RISK_PER_TRADE", 0.01), 0.001, 0.05);
+  const minQuoteVolume24h = Math.max(0, numberFromEnv(env, "PAPER_MIN_QUOTE_VOLUME_24H", 5_000_000));
+
   return {
     enabled: boolFromEnv(env.PAPER_POSITION_RISK_ENABLED, true),
     minRiskPerTrade: clamp(numberFromEnv(env, "PAPER_MIN_RISK_PER_TRADE", 0.0025), 0.0005, 0.05),
-    maxRiskPerTrade: clamp(numberFromEnv(env, "PAPER_MAX_RISK_PER_TRADE", 0.01), 0.001, 0.05),
+    maxRiskPerTrade,
+    highQualityRiskEnabled: boolFromEnv(env.PAPER_HIGH_QUALITY_RISK_ENABLED, true),
+    highQualityMaxRiskPerTrade: clamp(numberFromEnv(env, "PAPER_HIGH_QUALITY_MAX_RISK_PER_TRADE", 0.02), maxRiskPerTrade, 0.05),
+    highQualityMinConviction: clamp(numberFromEnv(env, "PAPER_HIGH_QUALITY_MIN_CONVICTION", 84), 50, 100),
+    highQualityMinRiskReward: clamp(numberFromEnv(env, "PAPER_HIGH_QUALITY_MIN_RR", 2.2), 0.8, 8),
+    highQualityMinWinProbability: clamp(numberFromEnv(env, "PAPER_HIGH_QUALITY_MIN_WIN_PROBABILITY", 0.65), 0.45, 0.95),
+    highQualityMinPlaybookScore: clamp(numberFromEnv(env, "PAPER_HIGH_QUALITY_MIN_PLAYBOOK_SCORE", 0.75), 0, 1),
+    highQualityMinVolumeRatio: clamp(numberFromEnv(env, "PAPER_HIGH_QUALITY_MIN_VOLUME_RATIO", 1), 0.1, 5),
+    highQualityMinQuoteVolume24h: Math.max(0, numberFromEnv(env, "PAPER_HIGH_QUALITY_MIN_QUOTE_VOLUME_24H", minQuoteVolume24h)),
     dailyMaxLossPercent: clamp(numberFromEnv(env, "PAPER_DAILY_MAX_LOSS_PCT", 0.03), 0.001, 0.5),
     weeklyMaxLossPercent: clamp(numberFromEnv(env, "PAPER_WEEKLY_MAX_LOSS_PCT", 0.07), 0.002, 0.8),
     maxConsecutiveLosses: Math.max(1, Math.trunc(numberFromEnv(env, "PAPER_MAX_CONSECUTIVE_LOSSES", 4))),
@@ -68,7 +79,7 @@ export function positionRiskConfigFromEnv(env = process.env) {
     highAtrPercent: clamp(numberFromEnv(env, "PAPER_HIGH_ATR_PCT", 0.055), 0.002, 1),
     maxAtrPercent: clamp(numberFromEnv(env, "PAPER_MAX_ATR_PCT", 0.12), 0.005, 1),
     minRiskReward: clamp(numberFromEnv(env, "PAPER_ENGINE_MIN_RR", 1.2), 0.5, 5),
-    minQuoteVolume24h: Math.max(0, numberFromEnv(env, "PAPER_MIN_QUOTE_VOLUME_24H", 5_000_000)),
+    minQuoteVolume24h,
     hardMinQuoteVolume24h: Math.max(0, numberFromEnv(env, "PAPER_HARD_MIN_QUOTE_VOLUME_24H", 50_000)),
     hardLowVolumeRatio: clamp(numberFromEnv(env, "PAPER_HARD_LOW_VOLUME_RATIO", 0.25), 0.01, 5),
     lowVolumeRatio: clamp(numberFromEnv(env, "PAPER_LOW_VOLUME_RATIO", 0.65), 0.05, 5)
@@ -132,6 +143,10 @@ function confidenceMultiplier(idea) {
   return 0.45;
 }
 
+function confidenceIsHigh(idea) {
+  return idea?.confidence === "HIGH";
+}
+
 function rrMultiplier(idea, config) {
   const rr = finite(idea?.riskReward, 0);
   if (rr < config.minRiskReward) return 0;
@@ -171,6 +186,20 @@ function lossStreakMultiplier(streak, config) {
   return 1;
 }
 
+function highQualityRiskEligible({ idea, config, multipliers, lossStreak }) {
+  if (!config.highQualityRiskEnabled) return false;
+  const quoteVolume = quoteVolume24h(idea);
+  if (!confidenceIsHigh(idea)) return false;
+  if (finite(idea?.convictionScore, 0) < config.highQualityMinConviction) return false;
+  if (finite(idea?.riskReward, 0) < config.highQualityMinRiskReward) return false;
+  if (finite(idea?.winProbability, 0) < config.highQualityMinWinProbability) return false;
+  if (finite(idea?.tradePlaybook?.score, 0) < config.highQualityMinPlaybookScore) return false;
+  if (volumeRatio(idea) < config.highQualityMinVolumeRatio) return false;
+  if (quoteVolume === null || quoteVolume < config.highQualityMinQuoteVolume24h) return false;
+  if (multipliers.volatility < 0.85 || multipliers.liquidity < 1 || multipliers.lossStreak < 1) return false;
+  return lossStreak === 0;
+}
+
 function dayWeekBlocks({ stats, equity, config }) {
   const dayLoss = periodLossPercent(stats?.periods?.day, equity);
   const weekLoss = periodLossPercent(stats?.periods?.week, equity);
@@ -195,7 +224,7 @@ export function evaluatePositionRisk({
 } = {}) {
   const riskConfig = config.positionRisk ?? positionRiskConfigFromEnv();
   const equity = Math.max(1, finite(state?.equity, state?.balance ?? 1));
-  const baseRisk = clamp(finite(config.riskPerTrade, 0.005), riskConfig.minRiskPerTrade, riskConfig.maxRiskPerTrade);
+  const requestedRisk = finite(config.riskPerTrade, 0.005);
   const bucket = assetRiskBucket(idea?.symbol);
   const lossStreak = currentLossStreak(state?.closedTrades ?? []);
   const openPositions = state?.openPositions ?? [];
@@ -210,24 +239,37 @@ export function evaluatePositionRisk({
     liquidity: liquidityMultiplier(idea, riskConfig),
     lossStreak: lossStreakMultiplier(lossStreak, riskConfig)
   };
+  const highQuality = highQualityRiskEligible({
+    idea,
+    config: riskConfig,
+    multipliers,
+    lossStreak
+  });
+  const qualityTier = highQuality ? "HIGH_EDGE" : "STANDARD";
+  const maxRiskFraction = highQuality
+    ? Math.max(riskConfig.maxRiskPerTrade, riskConfig.highQualityMaxRiskPerTrade)
+    : riskConfig.maxRiskPerTrade;
+  const baseRisk = clamp(requestedRisk, riskConfig.minRiskPerTrade, maxRiskFraction);
+  const scale = Object.values(multipliers).reduce((product, value) => product * value, 1);
+  const riskFraction = riskConfig.enabled ? clamp(baseRisk * scale, 0, maxRiskFraction) : requestedRisk;
+  const riskAmount = equity * riskFraction;
+  const projectedBucketRiskPercent = bucketRiskPercent + riskFraction;
   const blocks = [...period.blocks];
   const warnings = [];
 
   if (lossStreak >= riskConfig.maxConsecutiveLosses) blocks.push(`连续亏损 ${lossStreak} 次，暂停新开仓`);
   if (bucketCount >= riskConfig.sameBucketMaxPositions) blocks.push(`${bucket} 同类持仓已达 ${bucketCount} 个`);
   if (bucketRiskPercent >= riskConfig.sameBucketMaxRiskPercent) blocks.push(`${bucket} 同类风险 ${round(bucketRiskPercent * 100, 2)}% 已达上限`);
+  else if (projectedBucketRiskPercent > riskConfig.sameBucketMaxRiskPercent) blocks.push(`${bucket} 同类风险开仓后将达 ${round(projectedBucketRiskPercent * 100, 2)}%，超过上限`);
   if (multipliers.volatility === 0) blocks.push(`ATR/价格 ${round(atrPercent(idea) * 100, 2)}% 过高`);
   if (multipliers.riskReward === 0) blocks.push(`风险收益比 ${idea?.riskReward ?? "--"} 不足`);
   if (multipliers.liquidity === 0) blocks.push("极端低流动性，禁止开仓");
 
+  if (highQuality) warnings.push(`高性价比信号，风险预算上限提高至 ${round(maxRiskFraction * 100, 2)}%`);
   if (multipliers.lossStreak < 1 && multipliers.lossStreak > 0) warnings.push(`连续亏损 ${lossStreak} 次，自动降仓`);
   if (multipliers.volatility < 1 && multipliers.volatility > 0) warnings.push(`波动偏高，仓位缩放 ${round(multipliers.volatility * 100, 0)}%`);
   if (multipliers.confidence < 1) warnings.push(`置信度 ${idea?.confidence ?? "LOW"}，降低风险预算`);
   if (multipliers.liquidity < 1 && multipliers.liquidity > 0) warnings.push("流动性偏薄，小资金降仓执行");
-
-  const scale = Object.values(multipliers).reduce((product, value) => product * value, 1);
-  const riskFraction = riskConfig.enabled ? clamp(baseRisk * scale, 0, riskConfig.maxRiskPerTrade) : finite(config.riskPerTrade, 0.005);
-  const riskAmount = equity * riskFraction;
 
   return {
     enabled: riskConfig.enabled,
@@ -236,7 +278,9 @@ export function evaluatePositionRisk({
     symbol: idea?.symbol,
     direction: idea?.direction,
     bucket,
+    qualityTier,
     baseRiskFraction: round(baseRisk, 6),
+    maxRiskFraction: round(maxRiskFraction, 6),
     riskFraction: round(riskFraction, 6),
     riskAmount: round(riskAmount, 2),
     multipliers,
