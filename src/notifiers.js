@@ -817,7 +817,7 @@ function formatOpenPnlLine(position) {
 }
 
 function formatClosedPnlLine(entry) {
-  return `${pnlBadge(entry?.netPnl)} 仓位盈亏 ${formatCurrency(entry?.netPnl)} | 盈亏率 ${formatOptionalStatsRate(entry?.returnPercent)}`;
+  return `${pnlBadge(entry?.netPnl)} 盈亏金额 ${formatCurrency(entry?.netPnl)} | 盈亏比例 ${formatOptionalStatsRate(entry?.returnPercent)}`;
 }
 
 function pnlBadge(value) {
@@ -886,16 +886,21 @@ function todayClosedPaperHistory(paperAccount, dateKey) {
     ...(openHistoryById.get(trade?.id) ?? {}),
     ...trade
   });
+  const onlyClosed = (trade) => trade?.status === "CLOSED" || Boolean(trade?.closedAt);
 
   const dailySource = paperAccount.dailySummary?.date === dateKey ? paperAccount.dailySummary : null;
-  if (Array.isArray(dailySource?.closedTrades)) return dailySource.closedTrades.map(enrich);
+  if (Array.isArray(dailySource?.closedTrades)) return dailySource.closedTrades
+    .map(enrich)
+    .filter(onlyClosed);
 
   const recentClosed = Array.isArray(paperAccount.recentClosedTrades) ? paperAccount.recentClosedTrades : [];
-  if (recentClosed.length) return dailyPaperRows(recentClosed, dateKey, "closedAt").map(enrich);
+  if (recentClosed.length) return dailyPaperRows(recentClosed, dateKey, "closedAt")
+    .map(enrich)
+    .filter(onlyClosed);
 
   return dailyPaperRows(paperAccount.recentOpenHistory ?? [], dateKey, "closedAt")
-    .filter((entry) => entry.status === "CLOSED")
-    .map(enrich);
+    .map(enrich)
+    .filter(onlyClosed);
 }
 
 export function formatPaperAccountMessage(paperAccount, { reason = "账户更新", now = Date.now } = {}) {
@@ -926,12 +931,11 @@ export function formatPaperAccountMessage(paperAccount, { reason = "账户更新
     ? [
         `今日已平仓: ${todayHistory.length}`,
         ...todayHistory.slice(0, 6).flatMap((entry) => {
-          const closed = entry.status === "CLOSED" || entry.closedAt;
           return [
             `${pnlBadge(entry.netPnl)} ${entry.symbol} ${entry.direction} | ${entry.closeReason ?? entry.status ?? "CLOSED"}`,
             `入场 ${entry.entryPrice ?? "--"} | 出场 ${entry.exitPrice ?? "--"} | TP ${entry.takeProfit ?? "--"} | SL ${entry.stopLoss ?? "--"}`,
             formatCapitalRiskLine(entry),
-            closed ? formatClosedPnlLine(entry) : null
+            formatClosedPnlLine(entry)
           ].filter(Boolean);
         }),
         todayHistory.length > 6 ? `更多 ${todayHistory.length - 6} 笔历史仓位已保留在系统内` : null
