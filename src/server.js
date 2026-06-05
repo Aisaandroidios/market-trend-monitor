@@ -730,6 +730,7 @@ export function createHttpServer({
   }
 
   async function evaluateTradeIdeas({ pushMode = "complete" } = {}) {
+    const notify = pushMode !== "silent";
     const changedDirectionSymbols = new Set();
     const allTickerSnapshot = tickerStore.getAll();
     const stockTickers = tickerStore.getAll({ market: "stocks" });
@@ -792,7 +793,9 @@ export function createHttpServer({
     latestProbabilityCalibration = buildProbabilityCalibration(signalMemoryRecords, {
       now: Date.now()
     });
-    maybeSendProbabilityCalibrationTopic({ reason: "胜率校准更新" }).catch(() => {});
+    if (notify) {
+      maybeSendProbabilityCalibrationTopic({ reason: "胜率校准更新" }).catch(() => {});
+    }
     latestModelGovernance = buildModelGovernance({
       signalRecords: signalMemoryRecords,
       probabilityCalibration: latestProbabilityCalibration,
@@ -804,7 +807,9 @@ export function createHttpServer({
       paperTrades,
       now: Date.now()
     });
-    maybeSendStrategyAttributionTopic({ reason: "策略归因更新" }).catch(() => {});
+    if (notify) {
+      maybeSendStrategyAttributionTopic({ reason: "策略归因更新" }).catch(() => {});
+    }
     const longTermRegimeBySymbol = new Map();
     const externalModelSignals = loadExternalModelSignals();
 
@@ -893,6 +898,8 @@ export function createHttpServer({
         const previousDirection = lastDirections.get(displaySymbol);
         if (reviewedIdea.direction !== "NEUTRAL" && reviewedIdea.direction !== previousDirection) {
           lastDirections.set(displaySymbol, reviewedIdea.direction);
+          if (!notify) return;
+
           const ideaMarketContext = inferMarketContext({
             tradeIdeas: Array.from(tradeIdeas.values()),
             commodities: tickerStore.getAll({ market: "commodities" }),
@@ -1044,10 +1051,12 @@ export function createHttpServer({
     updateBestSignal();
     if (pushMode === "scan") {
       await sendOpportunityScanAlerts({ skipSymbols: changedDirectionSymbols });
-    } else if (completeTopicPushOnSchedule) {
-      await sendCompleteTopicPushes({ skipSymbols: changedDirectionSymbols });
-    } else {
-      await sendTopicStatusHeartbeats();
+    } else if (pushMode === "complete") {
+      if (completeTopicPushOnSchedule) {
+        await sendCompleteTopicPushes({ skipSymbols: changedDirectionSymbols });
+      } else {
+        await sendTopicStatusHeartbeats();
+      }
     }
     broadcastSnapshot();
   }
@@ -1342,7 +1351,7 @@ export function createHttpServer({
     if (startDecisionEngine) {
       startDecisionLoop();
       decisionWarmupTimer = setTimeout(() => {
-        runDecisionEvaluation({ pushMode: "complete" });
+        runDecisionEvaluation({ pushMode: "silent" });
       }, Math.max(0, decisionWarmupMs));
     }
 

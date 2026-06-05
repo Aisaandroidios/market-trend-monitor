@@ -137,10 +137,9 @@ export function decisionIntervalForUsMarketSession({
 }
 
 function alignedDelayMs({ now, intervalMs }) {
-  const intervalMinutes = Math.max(1, Math.round(intervalMs / 60000));
+  const intervalWindowMs = Math.max(1000, Math.round(intervalMs));
   const clock = newYorkClockParts(now);
   const elapsedMsToday = (((clock.minuteOfDay * 60) + clock.second) * 1000) + now.getMilliseconds();
-  const intervalWindowMs = intervalMinutes * 60000;
   const remainder = elapsedMsToday % intervalWindowMs;
 
   return remainder === 0 ? intervalWindowMs : intervalWindowMs - remainder;

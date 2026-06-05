@@ -52,7 +52,7 @@ const actionableIdea = {
   reason: "EMA20 above EMA60; RSI 55; MACD histogram 2.2"
 };
 
-test("uses faster opportunity scan intervals during active market sessions", () => {
+test("uses one-quarter opportunity scan intervals during active market sessions", () => {
   const config = opportunityScanScheduleConfigFromEnv({
     fixedIntervalMs: 600000,
     env: {}
@@ -67,9 +67,45 @@ test("uses faster opportunity scan intervals during active market sessions", () 
   });
 
   assert.equal(regular.session, "regular");
-  assert.equal(regular.intervalMs, 900000);
+  assert.equal(regular.intervalMs, 225000);
   assert.equal(offHours.session, "off_hours");
-  assert.equal(offHours.intervalMs, 14400000);
+  assert.equal(offHours.intervalMs, 3600000);
+});
+
+test("aligns one-quarter scans without rounding them to whole minutes", () => {
+  const config = opportunityScanScheduleConfigFromEnv({
+    fixedIntervalMs: 600000,
+    env: {}
+  });
+  const regular = opportunityScanIntervalForUsMarketSession({
+    now: new Date("2026-06-04T14:00:10Z"),
+    ...config
+  });
+
+  assert.equal(regular.intervalMs, 225000);
+  assert.equal(regular.delayMs, 215000);
+  assert.equal(regular.nextRunAt, "2026-06-04T14:03:45.000Z");
+});
+
+test("keeps explicit opportunity scan interval overrides", () => {
+  const config = opportunityScanScheduleConfigFromEnv({
+    fixedIntervalMs: 600000,
+    env: {
+      OPPORTUNITY_SCAN_REGULAR_INTERVAL_MS: "120000",
+      OPPORTUNITY_SCAN_OFF_HOURS_INTERVAL_MS: "1800000"
+    }
+  });
+  const regular = opportunityScanIntervalForUsMarketSession({
+    now: new Date("2026-06-04T14:00:00Z"),
+    ...config
+  });
+  const offHours = opportunityScanIntervalForUsMarketSession({
+    now: new Date("2026-06-05T04:30:00Z"),
+    ...config
+  });
+
+  assert.equal(regular.intervalMs, 120000);
+  assert.equal(offHours.intervalMs, 1800000);
 });
 
 test("selects only changed or high-conviction opportunities and respects cooldown", () => {

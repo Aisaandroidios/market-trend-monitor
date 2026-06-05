@@ -3,12 +3,12 @@ import { decisionIntervalForUsMarketSession } from "./market-session.js";
 import { normalizeTelegramTopicSymbol } from "./notifiers.js";
 
 const defaultOpportunityScanIntervals = {
-  regular: 900000,
-  near_open: 1800000,
-  premarket: 3600000,
-  after_hours: 3600000,
-  off_hours: 14400000,
-  weekend: 14400000
+  regular: 225000,
+  near_open: 450000,
+  premarket: 900000,
+  after_hours: 900000,
+  off_hours: 3600000,
+  weekend: 3600000
 };
 
 function positiveNumber(value, fallback) {

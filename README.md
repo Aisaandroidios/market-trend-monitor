@@ -143,6 +143,8 @@ TELEGRAM_BOT_TOKEN=your-token node scripts/telegram-topics.js
 - `DATA_STORE`
 - `SQLITE_DB_PATH`
 
+固定完整推送使用 `US_MARKET_*_DECISION_INTERVAL_MS`，并按对应间隔对齐到纽约时间的整点网格，例如 5:00、5:30、5:45。机会/反转扫描由 `OPPORTUNITY_SCAN_*_INTERVAL_MS` 控制，默认是对应固定推送间隔的 1/4；扫描发现市场反转或新的高质量机会时，会独立触发机会提醒，不需要等下一次固定完整推送。
+
 ## 数据存储
 
 默认 `DATA_STORE=auto`，系统会优先使用 Node 自带 `node:sqlite` 保存信号历史、模拟账户状态和模拟平仓记录；如果当前 Node 版本不支持 SQLite，会自动回退到 JSON/JSONL 文件。

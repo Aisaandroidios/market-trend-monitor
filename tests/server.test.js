@@ -22,6 +22,32 @@ async function withServer(server, callback) {
   }
 }
 
+function withTemporaryEnv(values, callback) {
+  const previous = new Map(Object.keys(values).map((key) => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(values)) {
+    if (value == null) delete process.env[key];
+    else process.env[key] = value;
+  }
+
+  return Promise.resolve()
+    .then(callback)
+    .finally(() => {
+      for (const [key, value] of previous) {
+        if (value == null) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+}
+
+function jsonResponse(payload) {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => payload,
+    text: async () => JSON.stringify(payload)
+  };
+}
+
 test("health endpoint reports service status", async () => {
   const store = createTickerStore();
   const server = createHttpServer({
@@ -39,6 +65,73 @@ test("health endpoint reports service status", async () => {
     assert.equal(response.status, 200);
     assert.equal(body.ok, true);
     assert.equal(body.tickers, 0);
+  });
+});
+
+test("startup warmup evaluates silently without sending topic pushes", async () => {
+  await withTemporaryEnv({
+    TELEGRAM_BOT_TOKEN: "test-token",
+    TELEGRAM_CHAT_ID: "-1001",
+    NOTIFICATION_SEND_ENABLED: "true",
+    DERIVATIVES_DATA_ENABLED: "false",
+    PYTHON_MODEL_BRAIN_ENABLED: "false",
+    REFERENCE_DATA_PROVIDERS: "none",
+    ALPHA_VANTAGE_API_KEY: "",
+    FINNHUB_API_KEY: ""
+  }, async () => {
+    const store = createTickerStore();
+    store.applyMiniTickerArray([
+      { s: "BTCUSDT", c: "69000", o: "68000", h: "70000", l: "67000", v: "10", q: "690000", E: 2 }
+    ]);
+    let telegramSendCount = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      const href = String(url);
+      if (href.includes("api.telegram.org")) {
+        telegramSendCount += 1;
+        return jsonResponse({ ok: true, result: { message_id: telegramSendCount } });
+      }
+      if (href.includes("/fapi/v1/ticker/24hr")) {
+        return jsonResponse([{ symbol: "BTCUSDT", quoteVolume: "1000000", volume: "10", priceChangePercent: "1" }]);
+      }
+      if (href.includes("/fapi/v1/klines")) {
+        return jsonResponse([]);
+      }
+      return jsonResponse({});
+    };
+
+    try {
+      const server = createHttpServer({
+        tickerStore: store,
+        startMarketStream: false,
+        startStooqPoller: false,
+        startDecisionEngine: true,
+        startOpportunityScanner: false,
+        startTelegramCommands: false,
+        startPaperDailySummary: false,
+        decisionWarmupMs: 0,
+        decisionNow: () => new Date("2026-06-04T14:00:00Z"),
+        decisionScheduleConfig: {
+          scheduleEnabled: true,
+          fixedIntervalMs: 900000,
+          intervals: {
+            regular: 900000
+          }
+        },
+        decisionSymbols: ["BTCUSDT"],
+        telegramTopicMap: {
+          BTCUSDT: "123"
+        }
+      });
+
+      await withServer(server, async () => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    assert.equal(telegramSendCount, 0);
   });
 });
 
