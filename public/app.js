@@ -17,6 +17,10 @@ const tradeIdeaList = document.querySelector("#tradeIdeaList");
 const bestSignalCard = document.querySelector("#bestSignalCard");
 const bestSignalContext = document.querySelector("#bestSignalContext");
 const activeMarketList = document.querySelector("#activeMarketList");
+const paperAccountCard = document.querySelector("#paperAccountCard");
+const paperAccountContext = document.querySelector("#paperAccountContext");
+const attributionCard = document.querySelector("#attributionCard");
+const attributionContext = document.querySelector("#attributionContext");
 
 let tickers = [];
 let stocks = [];
@@ -25,6 +29,9 @@ let signals = [];
 let tradeIdeas = [];
 let bestSignal = null;
 let activeMarkets = { crypto: [], stocks: [], commodities: [] };
+let paperAccount = null;
+let strategyPolicy = null;
+let performanceAttribution = null;
 
 function formatNumber(value, maximumFractionDigits = 8) {
   return new Intl.NumberFormat("en-US", {
@@ -37,6 +44,14 @@ function formatCompact(value) {
     notation: "compact",
     maximumFractionDigits: 2
   }).format(value);
+}
+
+function formatMoney(value) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2
+  }).format(value ?? 0);
 }
 
 function statusLabel(status) {
@@ -140,6 +155,7 @@ function renderTradeIdeas() {
           <span>估算胜率</span>
         </div>
         <dl>
+          <div><dt>综合分</dt><dd>${idea.convictionScore ?? "--"}</dd></div>
           <div><dt>入场</dt><dd>${idea.entry}</dd></div>
           <div><dt>止盈</dt><dd>${idea.takeProfit}</dd></div>
           <div><dt>止损</dt><dd>${idea.stopLoss}</dd></div>
@@ -188,7 +204,10 @@ function renderBestSignal() {
     return;
   }
 
-  bestSignalContext.textContent = `${bestSignal.marketContext?.riskMode ?? "mixed"} · ${bestSignal.confidence}`;
+  const policyText = strategyPolicy
+    ? ` · 执行≥${strategyPolicy.minConviction} RR≥${strategyPolicy.minRiskReward}`
+    : "";
+  bestSignalContext.textContent = `${bestSignal.marketContext?.riskMode ?? "mixed"} · ${bestSignal.confidence}${policyText}`;
 
   if (bestSignal.direction === "WAIT") {
     bestSignalCard.innerHTML = `
@@ -228,6 +247,143 @@ function renderBestSignal() {
   `;
 }
 
+function renderPaperAccount() {
+  if (!paperAccount) {
+    paperAccountCard.innerHTML = `<p class="empty-inline">等待策略账户同步...</p>`;
+    paperAccountContext.textContent = "等待同步";
+    return;
+  }
+
+  const totalStats = paperAccount.stats?.total ?? {};
+  const dayStats = paperAccount.stats?.periods?.day ?? {};
+  const pnl = (paperAccount.equity ?? 0) - (paperAccount.initialBalance ?? 0);
+  const pnlClass = pnl >= 0 ? "positive" : "negative";
+  const updatedAt = paperAccount.updatedAt ? new Date(paperAccount.updatedAt).toLocaleTimeString() : "--";
+  paperAccountContext.textContent = `${paperAccount.openPositionCount ?? 0} 仓位 · ${updatedAt}`;
+
+  const openPositions = paperAccount.openPositions ?? [];
+  const positionHtml = openPositions.length === 0
+    ? `<p class="paper-empty">当前无模拟持仓</p>`
+    : openPositions.slice(0, 4).map((position) => {
+        const directionClass = position.direction === "LONG" ? "positive" : "negative";
+        return `
+          <article class="paper-position">
+            <div>
+              <strong>${position.symbol}</strong>
+              <span class="${directionClass}">${position.direction}</span>
+            </div>
+            <dl>
+              <div><dt>入场</dt><dd>${position.entryPrice}</dd></div>
+              <div><dt>现价</dt><dd>${position.currentPrice}</dd></div>
+              <div><dt>浮盈亏</dt><dd class="${(position.unrealizedPnl ?? 0) >= 0 ? "positive" : "negative"}">${formatMoney(position.unrealizedPnl)}</dd></div>
+              <div><dt>RR</dt><dd>${position.riskReward}</dd></div>
+            </dl>
+          </article>
+        `;
+      }).join("");
+
+  paperAccountCard.innerHTML = `
+    <article class="paper-main">
+      <div class="paper-summary">
+        <div>
+          <span>权益</span>
+          <strong>${formatMoney(paperAccount.equity)}</strong>
+        </div>
+        <div>
+          <span>累计盈亏</span>
+          <strong class="${pnlClass}">${formatMoney(pnl)}</strong>
+        </div>
+        <div>
+          <span>累计胜率</span>
+          <strong>${totalStats.winRate ?? 0}%</strong>
+        </div>
+        <div>
+          <span>最大回撤</span>
+          <strong>${paperAccount.maxDrawdownPercent ?? 0}%</strong>
+        </div>
+        <div>
+          <span>日累计</span>
+          <strong>${dayStats.wins ?? 0}/${dayStats.trades ?? 0}</strong>
+        </div>
+        <div>
+          <span>总交易</span>
+          <strong>${totalStats.trades ?? 0}</strong>
+        </div>
+      </div>
+      <div class="paper-positions">
+        ${positionHtml}
+      </div>
+    </article>
+  `;
+}
+
+function bucketLine(bucket, tone = "") {
+  const samples = (bucket.reviewed ?? 0) + (bucket.paperTrades ?? 0);
+  const paperPnl = bucket.paperTrades > 0 ? ` · PnL ${formatMoney(bucket.netPnl)}` : "";
+  const score = Math.round((bucket.score ?? 0.5) * 100);
+
+  return `
+    <article class="attribution-item ${tone}">
+      <div>
+        <strong>${bucket.label ?? bucket.key}</strong>
+        <span>样本 ${samples} · 评分 ${score}%${paperPnl}</span>
+      </div>
+      <b>${bucket.successRate ?? 0}%</b>
+    </article>
+  `;
+}
+
+function renderAttribution() {
+  const total = performanceAttribution?.total;
+  if (!total) {
+    attributionCard.innerHTML = `<p class="empty-inline">等待历史复盘和模拟成交...</p>`;
+    attributionContext.textContent = "等待归因";
+    return;
+  }
+
+  const samples = (total.reviewed ?? 0) + (total.paperTrades ?? 0);
+  attributionContext.textContent = `样本 ${samples} · 总分 ${Math.round((total.score ?? 0.5) * 100)}%`;
+  const strengths = performanceAttribution.strengths ?? [];
+  const weaknesses = performanceAttribution.weaknesses ?? [];
+  const recommendations = performanceAttribution.recommendations ?? [];
+
+  attributionCard.innerHTML = `
+    <article class="attribution-main">
+      <div class="attribution-summary">
+        <div>
+          <span>复盘胜率</span>
+          <strong>${total.successRate ?? 0}%</strong>
+        </div>
+        <div>
+          <span>模拟胜率</span>
+          <strong>${total.paperWinRate ?? 0}%</strong>
+        </div>
+        <div>
+          <span>模拟PnL</span>
+          <strong class="${(total.netPnl ?? 0) >= 0 ? "positive" : "negative"}">${formatMoney(total.netPnl)}</strong>
+        </div>
+        <div>
+          <span>已复盘</span>
+          <strong>${total.reviewed ?? 0}</strong>
+        </div>
+      </div>
+      <div class="attribution-columns">
+        <div>
+          <h3>强项</h3>
+          ${strengths.length ? strengths.slice(0, 3).map((bucket) => bucketLine(bucket, "positive-tint")).join("") : `<p class="paper-empty">强项样本不足</p>`}
+        </div>
+        <div>
+          <h3>弱项</h3>
+          ${weaknesses.length ? weaknesses.slice(0, 3).map((bucket) => bucketLine(bucket, "negative-tint")).join("") : `<p class="paper-empty">暂未识别明显弱项</p>`}
+        </div>
+      </div>
+      <div class="attribution-notes">
+        ${recommendations.slice(0, 3).map((item) => `<span>${item}</span>`).join("")}
+      </div>
+    </article>
+  `;
+}
+
 function applyPayload(payload) {
   tickers = payload.tickers;
   stocks = payload.stocks ?? [];
@@ -236,6 +392,9 @@ function applyPayload(payload) {
   tradeIdeas = payload.tradeIdeas ?? [];
   bestSignal = payload.bestSignal ?? null;
   activeMarkets = payload.activeMarkets ?? { crypto: [], stocks: [], commodities: [] };
+  paperAccount = payload.paperAccount ?? null;
+  strategyPolicy = payload.strategyPolicy ?? null;
+  performanceAttribution = payload.performanceAttribution ?? null;
   cryptoCount.textContent = String(payload.counts?.crypto ?? tickers.length);
   stockCount.textContent = String(payload.counts?.stocks ?? stocks.length);
   commodityCount.textContent = String(payload.counts?.commodities ?? commodities.length);
@@ -249,6 +408,8 @@ function applyPayload(payload) {
   renderCards(commodityCards, commodities);
   renderSignals();
   renderBestSignal();
+  renderPaperAccount();
+  renderAttribution();
   renderTradeIdeas();
   renderActiveMarkets();
   render();

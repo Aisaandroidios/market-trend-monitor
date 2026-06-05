@@ -88,6 +88,7 @@ export function selectOpportunityAlerts({
   lastAlerts = new Map(),
   nowMs = Date.now(),
   cooldownMs = 1800000,
+  strategyPolicy = null,
   minConviction = 68,
   minFirstScore = 74,
   scoreJump = 6,
@@ -95,6 +96,9 @@ export function selectOpportunityAlerts({
   skipSymbols = new Set()
 } = {}) {
   const normalizedSkips = new Set([...skipSymbols].map((symbol) => normalizeTelegramTopicSymbol(symbol)));
+  const effectiveMinConviction = Number(strategyPolicy?.minConviction ?? minConviction);
+  const effectiveMinFirstScore = Number(strategyPolicy?.minFirstOpportunityScore ?? minFirstScore);
+  const effectiveScoreJump = Number(strategyPolicy?.scoreJump ?? scoreJump);
 
   return tradeIdeas
     .map((idea) => {
@@ -104,13 +108,18 @@ export function selectOpportunityAlerts({
     })
     .filter((idea) => isActionable(idea))
     .filter((idea) => !normalizedSkips.has(normalizeTelegramTopicSymbol(idea.symbol)))
-    .filter((idea) => Number(idea.convictionScore ?? 0) >= minConviction)
+    .filter((idea) => Number(idea.convictionScore ?? 0) >= effectiveMinConviction)
     .map((idea) => {
       const previous = lastAlerts.get(idea.symbol);
       const stateKey = opportunityStateKey(idea);
       const inCooldown = previous?.sentAt && nowMs - previous.sentAt < cooldownMs;
       const sameState = previous?.stateKey === stateKey;
-      const reasons = alertReasons({ idea, previous, minFirstScore, scoreJump });
+      const reasons = alertReasons({
+        idea,
+        previous,
+        minFirstScore: effectiveMinFirstScore,
+        scoreJump: effectiveScoreJump
+      });
 
       if (inCooldown && sameState) return null;
       if (reasons.length === 0) return null;

@@ -164,6 +164,8 @@ select {
 .market-section,
 .trade-ideas,
 .best-signal,
+.paper-account,
+.performance-attribution,
 .active-markets {
   margin-bottom: 16px;
 }
@@ -247,6 +249,212 @@ select {
   padding: 7px 9px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.paper-main {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 16px;
+}
+
+.paper-summary {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--line);
+}
+
+.paper-summary div {
+  background: #fbfcfb;
+  padding: 10px;
+  min-width: 0;
+}
+
+.paper-summary span,
+.paper-summary strong {
+  display: block;
+}
+
+.paper-summary span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.paper-summary strong {
+  margin-top: 4px;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.paper-positions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.paper-position {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfb;
+}
+
+.paper-position > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.paper-position dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 12px 0 0;
+}
+
+.paper-position dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.paper-position dd {
+  margin: 2px 0 0;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.paper-empty {
+  margin: 0;
+  min-height: 72px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+}
+
+.attribution-main {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 16px;
+}
+
+.attribution-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--line);
+}
+
+.attribution-summary div {
+  background: #fbfcfb;
+  padding: 10px;
+  min-width: 0;
+}
+
+.attribution-summary span,
+.attribution-summary strong {
+  display: block;
+}
+
+.attribution-summary span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.attribution-summary strong {
+  margin-top: 4px;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.attribution-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.attribution-columns h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.attribution-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 62px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: #fbfcfb;
+}
+
+.attribution-item + .attribution-item {
+  margin-top: 8px;
+}
+
+.attribution-item div {
+  min-width: 0;
+}
+
+.attribution-item strong,
+.attribution-item span {
+  display: block;
+}
+
+.attribution-item strong {
+  overflow-wrap: anywhere;
+}
+
+.attribution-item span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.attribution-item b {
+  flex: 0 0 auto;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.positive-tint {
+  border-left: 4px solid var(--green);
+}
+
+.negative-tint {
+  border-left: 4px solid var(--red);
+}
+
+.attribution-notes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.attribution-notes span {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 9px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .signal-list {
@@ -518,6 +726,15 @@ tr:last-child td {
 
   .best-levels {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .paper-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .attribution-summary,
+  .attribution-columns {
+    grid-template-columns: 1fr;
   }
 
   .best-heading {

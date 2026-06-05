@@ -1,17 +1,18 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
-
-const defaultHistoryPath = path.join(process.cwd(), "data", "signal-history.jsonl");
+import {
+  getDefaultDataStore,
+  loadJsonl
+} from "./data-store.js";
 
 export function appendSignalMemory({
-  filePath = process.env.SIGNAL_HISTORY_PATH ?? defaultHistoryPath,
+  filePath,
   idea,
   marketContext = {},
   generatedAt = new Date().toISOString()
 }) {
   if (!idea) return false;
 
-  mkdirSync(path.dirname(filePath), { recursive: true });
   const contractLongTermRegime = idea.longTermRegime ?? null;
   const broadLongTermRegime = marketContext.longTermRegime ?? null;
   const record = {
@@ -39,27 +40,22 @@ export function appendSignalMemory({
     previousSignalReview: idea.previousSignalReview ?? null
   };
 
-  appendFileSync(filePath, `${JSON.stringify(record)}\n`);
+  if (filePath) {
+    mkdirSync(path.dirname(filePath), { recursive: true });
+    appendFileSync(filePath, `${JSON.stringify(record)}\n`);
+    return true;
+  }
+
+  getDefaultDataStore().appendSignalRecord(record);
   return true;
 }
 
 export function loadSignalMemory({
-  filePath = process.env.SIGNAL_HISTORY_PATH ?? defaultHistoryPath
+  filePath
 } = {}) {
-  if (!existsSync(filePath)) return [];
+  if (filePath) return loadJsonl(filePath);
 
-  return readFileSync(filePath, "utf8")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      try {
-        return JSON.parse(line);
-      } catch {
-        return null;
-      }
-    })
-    .filter(Boolean);
+  return getDefaultDataStore().loadSignalRecords();
 }
 
 function isFiniteNumber(value) {

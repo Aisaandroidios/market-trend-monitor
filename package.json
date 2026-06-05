@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node src/server.js",
-    "check": "node --check src/server.js && node --check src/notifiers.js && node --check src/python-model-signals.js && node --check src/yahoo-data.js",
+    "check": "node --check src/server.js && node --check src/data-store.js && node --check src/signal-memory.js && node --check src/performance-attribution.js && node --check src/conviction.js && node --check src/strategy-policy.js && node --check src/opportunity-scan.js && node --check src/notifiers.js && node --check src/paper-account.js && node --check src/telegram-commands.js && node --check src/python-model-signals.js && node --check src/yahoo-data.js",
     "telegram:topics": "node scripts/telegram-topics.js",
     "test": "node --test"
   },

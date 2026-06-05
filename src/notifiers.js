@@ -7,6 +7,15 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function enabledFromEnv(value, fallback = true) {
+  if (value == null || value === "") return fallback;
+  return !["0", "false", "no", "off"].includes(String(value).trim().toLowerCase());
+}
+
+function notificationSendEnabled() {
+  return enabledFromEnv(process.env.NOTIFICATION_SEND_ENABLED, true);
+}
+
 function enqueueTelegramSend(task) {
   const run = telegramSendQueue.then(task, task);
   telegramSendQueue = run.catch(() => {});
@@ -73,6 +82,10 @@ export async function sendTelegramMessage({
   maxRetries = 2,
   now = Date.now
 }) {
+  if (!notificationSendEnabled()) {
+    return { ok: false, skipped: true, reason: "notification_send_disabled" };
+  }
+
   if (!token || !chatId) {
     return { ok: false, skipped: true, reason: "missing_telegram_config" };
   }
@@ -235,6 +248,10 @@ export async function sendLarkMessage({
   text,
   fetchImpl = globalThis.fetch
 }) {
+  if (!notificationSendEnabled()) {
+    return { ok: false, skipped: true, reason: "notification_send_disabled" };
+  }
+
   if (!webhookUrl) {
     return { ok: false, skipped: true, reason: "missing_lark_config" };
   }
@@ -275,11 +292,17 @@ function scoreForMessage(idea, { marketContext = {} } = {}) {
   if (idea.convictionScore !== undefined) return idea;
   return scoreTradeIdea(idea, { marketContext }) ?? {
     ...idea,
-    convictionScore: 0,
+    convictionScore: null,
     confidence: "LOW",
     supporting: [],
     risks: []
   };
+}
+
+function formatScore(value) {
+  if (value === null || value === undefined || value === "") return "--";
+  const number = Number(value);
+  return Number.isFinite(number) ? String(value) : "--";
 }
 
 function defaultSupporting(scored) {
@@ -466,8 +489,10 @@ export function formatTopicStatusMessage({ symbol, idea, ticker } = {}) {
       `🎯 标的: ${scored.symbol ?? normalizedSymbol}`,
       metadata ? `公司: ${metadata.companyName}` : null,
       `${directionEmoji(scored.direction)} 状态: ${scored.direction ?? "NEUTRAL"} | ${scored.action ?? "WAIT"}`,
-      `综合分: ${scored.convictionScore ?? "--"} | ${scored.confidence ?? "LOW"}`,
+      `综合分: ${formatScore(scored.convictionScore)} | ${scored.confidence ?? "LOW"}`,
       "",
+      ...formatStrategyPolicyBlock(scored.strategyPolicy),
+      ...(scored.strategyPolicy ? [""] : []),
       ...formatDataQuoteBlock(scored),
       "",
       "📊 观察位置",
@@ -617,8 +642,64 @@ function formatStrategyFeedbackBlock(scored) {
   ];
 }
 
+function formatStrategyPolicyBlock(policy) {
+  if (!policy) return [];
+  const thresholds = policy.confidenceThresholds ?? {};
+  const reasons = (policy.reasons ?? []).slice(0, 2);
+
+  return [
+    "🧮 动态标准",
+    `最低执行分: ${formatScore(policy.minConviction)} | 最低RR: ${policy.minRiskReward ?? "--"}`,
+    `执行检查: ${policy.minPlaybookScore ?? "--"} | 置信阈值: M ${thresholds.medium ?? "--"} / H ${thresholds.high ?? "--"}`,
+    ...reasons.map((reason) => `依据: ${reason}`)
+  ];
+}
+
 function formatStatsRate(value) {
   return `${Number(value ?? 0).toFixed(2).replace(/\.?0+$/, "")}%`;
+}
+
+function formatCurrency(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return `$${number.toFixed(2).replace(/\.?0+$/, "")}`;
+}
+
+function formatPaperDirectionStats(label, stats = {}) {
+  return `${label}: ${stats.wins ?? 0}/${stats.trades ?? 0} | 胜率 ${formatStatsRate(stats.winRate)}`;
+}
+
+function formatPaperAccountBlock(paperAccount) {
+  if (!paperAccount?.enabled) return [];
+
+  const total = paperAccount.stats?.total ?? {};
+  const day = paperAccount.stats?.periods?.day ?? {};
+  const week = paperAccount.stats?.periods?.week ?? {};
+  const month = paperAccount.stats?.periods?.month ?? {};
+  const year = paperAccount.stats?.periods?.year ?? {};
+  const pnl = Number(paperAccount.equity ?? 0) - Number(paperAccount.initialBalance ?? 0);
+  const openPositions = paperAccount.openPositions ?? [];
+  const positionLines = openPositions.length === 0
+    ? ["当前持仓: 无"]
+    : [
+        `当前持仓: ${openPositions.length}`,
+        ...openPositions.slice(0, 3).map((position) => (
+          `${position.symbol} ${position.direction} | 入场 ${position.entryPrice} | 浮盈亏 ${formatCurrency(position.unrealizedPnl)}`
+        ))
+      ];
+
+  return [
+    "💼 模拟账户",
+    `余额: ${formatCurrency(paperAccount.balance)} | 权益: ${formatCurrency(paperAccount.equity)}`,
+    `累计盈亏: ${formatCurrency(pnl)} | 最大回撤: ${formatStatsRate(paperAccount.maxDrawdownPercent)}`,
+    `累计: ${total.wins ?? 0}/${total.trades ?? 0} | 胜率 ${formatStatsRate(total.winRate)}`,
+    `多单: ${total.long?.wins ?? 0}/${total.long?.trades ?? 0} | 空单: ${total.short?.wins ?? 0}/${total.short?.trades ?? 0}`,
+    formatPaperDirectionStats("今日", day),
+    formatPaperDirectionStats("本周", week),
+    formatPaperDirectionStats("本月", month),
+    formatPaperDirectionStats("本年", year),
+    ...positionLines
+  ];
 }
 
 const strategyPeriodLabels = [
@@ -668,17 +749,17 @@ function bulletList(items) {
   return items.map((item) => `• ${technicalReason(item)}`).filter((item) => item.trim() !== "•");
 }
 
-export function formatTradeIdeaMessage(idea, { marketContext = {} } = {}) {
+export function formatTradeIdeaMessage(idea, { marketContext = {}, paperAccount = null } = {}) {
   const scored = scoreForMessage(idea, { marketContext });
   const summary = scored.summary
-    ?? `${scored.symbol} ${scored.direction} 是当前最高置信方向，综合分 ${scored.convictionScore}，动作 ${scored.action}。`;
+    ?? `${scored.symbol} ${scored.direction} 是当前最高置信方向，综合分 ${formatScore(scored.convictionScore)}，动作 ${scored.action}。`;
   const supporting = scored.supporting?.length ? scored.supporting : defaultSupporting(scored);
   const risks = risksForMessage(scored);
 
   return [
     `🎯 标的: ${scored.symbol}`,
     `${directionEmoji(scored.direction)} 方向: ${scored.direction} | ${scored.action}`,
-    `⭐ 综合分: ${scored.convictionScore} | ${scored.confidence}`,
+    `⭐ 综合分: ${formatScore(scored.convictionScore)} | ${scored.confidence}`,
     "",
     "💰 交易计划",
     `入场: ${scored.entry}`,
@@ -704,8 +785,12 @@ export function formatTradeIdeaMessage(idea, { marketContext = {} } = {}) {
     ...(scored.previousSignalReview ? [""] : []),
     ...formatStrategyFeedbackBlock(scored),
     ...(scored.strategyFeedback ? [""] : []),
+    ...formatStrategyPolicyBlock(scored.strategyPolicy ?? marketContext.strategyPolicy),
+    ...(scored.strategyPolicy || marketContext.strategyPolicy ? [""] : []),
     ...formatStrategyStatsBlock(scored),
     ...(scored.strategyStats ? [""] : []),
+    ...formatPaperAccountBlock(paperAccount ?? scored.paperAccount),
+    ...(paperAccount || scored.paperAccount ? [""] : []),
     ...formatNewsBlock(scored),
     "",
     ...formatLongTermRegimeBlock(scored),
@@ -724,22 +809,30 @@ export function formatTradeIdeaMessage(idea, { marketContext = {} } = {}) {
   ].filter((line) => line !== null).join("\n");
 }
 
-export function formatBestSignalMessage(signal) {
+export function formatBestSignalMessage(signal, { paperAccount = null } = {}) {
   if (signal.direction === "WAIT") {
     return [
       "最高置信方向",
       "动作: WAIT",
-      `原因: ${signal.summary}`
-    ].join("\n");
+      `原因: ${signal.summary}`,
+      "",
+      ...formatStrategyPolicyBlock(signal.strategyPolicy),
+      ...(signal.strategyPolicy ? [""] : []),
+      ...formatPaperAccountBlock(paperAccount ?? signal.paperAccount)
+    ].filter((line, index, lines) => line !== "" || lines[index + 1]).join("\n");
   }
 
-  return formatTradeIdeaMessage(signal, { title: "最高置信方向", marketContext: signal.marketContext });
+  return formatTradeIdeaMessage(signal, {
+    title: "最高置信方向",
+    marketContext: signal.marketContext,
+    paperAccount: paperAccount ?? signal.paperAccount
+  });
 }
 
-export function formatMarketReversalMessage(signal) {
+export function formatMarketReversalMessage(signal, { paperAccount = null } = {}) {
   const best = signal.bestSignal;
   const bestLine = best?.symbol
-    ? `最高置信: ${best.symbol} ${best.direction ?? "--"} | 综合分 ${best.convictionScore ?? "--"}`
+    ? `最高置信: ${best.symbol} ${best.direction ?? "--"} | 综合分 ${formatScore(best.convictionScore)}`
     : "最高置信: 暂无单标的确认";
 
   return [
@@ -747,7 +840,7 @@ export function formatMarketReversalMessage(signal) {
     `方向: ${signal.previousBias ?? "NEUTRAL"} -> ${signal.currentBias ?? signal.direction ?? "NEUTRAL"} | ${signal.action ?? "WAIT"}`,
     `风险模式: ${signal.previousRiskMode ?? "unknown"} -> ${signal.currentRiskMode ?? "unknown"}`,
     `长期结构: ${regimeLabel(signal.previousRegime)} -> ${regimeLabel(signal.currentRegime)}`,
-    `综合分: ${signal.convictionScore ?? 0} | ${signal.confidence ?? "LOW"}`,
+    `综合分: ${formatScore(signal.convictionScore)} | ${signal.confidence ?? "LOW"}`,
     bestLine,
     "",
     "📝 摘要",
@@ -757,7 +850,11 @@ export function formatMarketReversalMessage(signal) {
     ...bulletList((signal.supporting ?? []).slice(0, 4)),
     "",
     "⚠️ 主要风险",
-    ...bulletList((signal.risks ?? []).slice(0, 3))
+    ...bulletList((signal.risks ?? []).slice(0, 3)),
+    "",
+    ...formatStrategyPolicyBlock(signal.strategyPolicy),
+    ...(signal.strategyPolicy ? [""] : []),
+    ...formatPaperAccountBlock(paperAccount ?? signal.paperAccount)
   ].join("\n");
 }
 
@@ -832,9 +929,10 @@ export async function sendTelegramRoutedMessage({
 
 export async function sendTradeIdeaNotifications({
   idea,
+  paperAccount,
   fetchImpl = globalThis.fetch
 }) {
-  const text = formatTradeIdeaMessage(idea, { marketContext: idea.marketContext });
+  const text = formatTradeIdeaMessage(idea, { marketContext: idea.marketContext, paperAccount });
   const [telegram, lark] = await Promise.all([
     sendTelegramSymbolMessage({ symbol: idea.symbol, text, fetchImpl }),
     sendLarkMessage({ text, fetchImpl })
@@ -866,11 +964,12 @@ export async function sendCompleteTopicNotification({
   kind,
   idea,
   ticker,
+  paperAccount,
   telegram: telegramConfig = {},
   fetchImpl = globalThis.fetch
 }) {
   const text = kind === "trade_idea" && idea
-    ? formatTradeIdeaMessage(idea, { marketContext: idea.marketContext })
+    ? formatTradeIdeaMessage(idea, { marketContext: idea.marketContext, paperAccount })
     : formatTopicStatusMessage({ symbol, idea, ticker });
   const telegram = await sendTelegramSymbolMessage({
     symbol,
@@ -884,9 +983,10 @@ export async function sendCompleteTopicNotification({
 
 export async function sendBestSignalNotifications({
   signal,
+  paperAccount,
   fetchImpl = globalThis.fetch
 }) {
-  const text = formatBestSignalMessage(signal);
+  const text = formatBestSignalMessage(signal, { paperAccount });
   const [telegram, lark] = await Promise.all([
     sendTelegramSymbolMessage({ symbol: signal.symbol, text, fetchImpl }),
     sendLarkMessage({ text, fetchImpl })
@@ -897,10 +997,11 @@ export async function sendBestSignalNotifications({
 
 export async function sendMarketReversalNotifications({
   signal,
+  paperAccount,
   telegram: telegramConfig = {},
   fetchImpl = globalThis.fetch
 }) {
-  const text = formatMarketReversalMessage(signal);
+  const text = formatMarketReversalMessage(signal, { paperAccount });
   const [telegram, lark] = await Promise.all([
     sendTelegramRoutedMessage({ symbol: signal.symbol, text, fetchImpl, ...telegramConfig }),
     sendLarkMessage({ text, fetchImpl })

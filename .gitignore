@@ -6,7 +6,12 @@ node_modules/
 venv/
 __pycache__/
 *.pyc
+data/paper-account.json
 data/*.jsonl
+data/*.sqlite
+data/*.sqlite-*
+data/*.db
+data/*.db-*
 docs/superpowers/
 .DS_Store
 .idea/

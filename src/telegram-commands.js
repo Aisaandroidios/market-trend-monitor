@@ -126,10 +126,12 @@ function bestConfiguredTopicIdea({ topicMap, snapshot }) {
   const configuredSymbols = new Set(Object.keys(topicMap));
   const marketContext = snapshot.bestSignal?.marketContext ?? {};
 
-  return (snapshot.tradeIdeas ?? [])
+  const ranked = (snapshot.tradeIdeas ?? [])
     .filter((idea) => configuredSymbols.size === 0 || configuredSymbols.has(idea.symbol))
     .map((idea) => idea.convictionScore !== undefined ? idea : scoreTradeIdea(idea, { marketContext }) ?? idea)
-    .sort((left, right) => (right.convictionScore ?? 0) - (left.convictionScore ?? 0))[0];
+    .sort((left, right) => (right.convictionScore ?? 0) - (left.convictionScore ?? 0));
+
+  return ranked.find((idea) => idea.action !== "WAIT") ?? ranked[0];
 }
 
 export function buildTopicReply({
@@ -166,7 +168,8 @@ export function buildTopicReply({
     if (!bestIdea) return "当前已配置 Topic 暂无可用策略。";
     return formatTradeIdeaMessage(bestIdea, {
       title: "最高置信方向",
-      marketContext: snapshot.bestSignal?.marketContext
+      marketContext: snapshot.bestSignal?.marketContext,
+      paperAccount: snapshot.paperAccount
     });
   }
 
@@ -185,7 +188,8 @@ export function buildTopicReply({
   if (idea) {
     return formatTradeIdeaMessage(idea, {
       title: "Topic 最新策略",
-      marketContext: snapshot.bestSignal?.marketContext
+      marketContext: snapshot.bestSignal?.marketContext,
+      paperAccount: snapshot.paperAccount
     });
   }
 

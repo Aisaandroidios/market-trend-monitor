@@ -180,12 +180,13 @@ function supportingAndRisks(idea, factors) {
     risks.push(idea.news?.detail ?? "新闻情绪未配置或当前为中性");
   }
   if (idea.riskReward < 1.5) risks.push("风险收益比偏低");
+  if (idea.action === "WAIT") risks.push("交易动作仍为 WAIT，说明当前只是观察方向，不是立即开单。");
 
   return { supporting, risks };
 }
 
 export function scoreTradeIdea(idea, { marketContext = {} } = {}) {
-  if (!idea || idea.direction === "NEUTRAL" || idea.action === "WAIT") {
+  if (!idea || idea.direction === "NEUTRAL") {
     return null;
   }
 
@@ -377,15 +378,22 @@ export function buildBestSignal({
   tradeIdeas = [],
   marketContext = {},
   minimumConviction = 60,
+  strategyPolicy = null,
   generatedAt = Date.now()
 } = {}) {
   const ranked = tradeIdeas
-    .map((idea) => scoreTradeIdea(idea, { marketContext }))
+    .map((idea) => idea?.convictionScore !== undefined && Array.isArray(idea?.factors)
+      ? idea
+      : scoreTradeIdea(idea, { marketContext }))
     .filter(Boolean)
     .sort((left, right) => right.convictionScore - left.convictionScore)
     .map((idea, index) => ({ ...idea, rank: index + 1 }));
 
-  const best = ranked[0];
+  const actionableRanked = ranked
+    .filter((idea) => idea.action !== "WAIT")
+    .map((idea, index) => ({ ...idea, executionRank: index + 1 }));
+  const best = actionableRanked[0];
+  const strongestWatch = ranked[0];
   if (!best || best.convictionScore < minimumConviction) {
     return {
       id: `best:WAIT:${generatedAt}`,
@@ -394,13 +402,16 @@ export function buildBestSignal({
       market: "multi",
       direction: "WAIT",
       action: "WAIT",
-      convictionScore: best?.convictionScore ?? 0,
+      convictionScore: strongestWatch?.convictionScore ?? 0,
       confidence: "LOW",
-      summary: "当前没有足够清晰的高置信方向，等待更好的风险收益比或趋势共振。",
+      summary: strongestWatch
+        ? `当前没有足够清晰的可执行高置信方向；最高观察标的是 ${strongestWatch.symbol} ${strongestWatch.direction}，综合分 ${strongestWatch.convictionScore}，但动作仍为 ${strongestWatch.action}。`
+        : "当前没有足够清晰的高置信方向，等待更好的风险收益比或趋势共振。",
       supporting: [],
-      risks: ["最高分信号没有达到最低置信阈值"],
+      risks: ["最高可执行信号没有达到最低置信阈值"],
       alternatives: ranked.slice(0, 3),
       marketContext,
+      strategyPolicy,
       generatedAt: new Date(generatedAt).toISOString()
     };
   }
@@ -411,6 +422,7 @@ export function buildBestSignal({
     summary: `${best.symbol} ${best.direction} 是当前最高置信方向，综合分 ${best.convictionScore}，动作 ${best.action}。`,
     alternatives: ranked.slice(1, 4),
     marketContext,
+    strategyPolicy,
     generatedAt: new Date(generatedAt).toISOString()
   };
 }

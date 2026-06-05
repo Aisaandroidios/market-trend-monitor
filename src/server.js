@@ -68,6 +68,21 @@ import {
   opportunityScanScheduleConfigFromEnv,
   selectOpportunityAlerts
 } from "./opportunity-scan.js";
+import { createPaperAccount } from "./paper-account.js";
+import {
+  applyStrategyPolicyToIdea,
+  applyStrategyPolicyToIdeas,
+  deriveStrategyPolicy
+} from "./strategy-policy.js";
+import {
+  defaultDataStoreInfo,
+  getDefaultDataStore
+} from "./data-store.js";
+import {
+  attributionSliceForIdea,
+  buildAttributionStrategyFeedback,
+  buildPerformanceAttribution
+} from "./performance-attribution.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -197,7 +212,8 @@ export function createHttpServer({
   topicStatusHeartbeatMs = Number(process.env.TOPIC_STATUS_HEARTBEAT_MS ?? 1800000),
   opportunityAlertCooldownMs = Number(process.env.OPPORTUNITY_ALERT_COOLDOWN_MS ?? 1800000),
   decisionWarmupMs = Number(process.env.DECISION_WARMUP_MS ?? 15000),
-  completeTopicPushOnSchedule = enabledFromEnv(process.env.COMPLETE_TOPIC_PUSH_ON_SCHEDULE, true)
+  completeTopicPushOnSchedule = enabledFromEnv(process.env.COMPLETE_TOPIC_PUSH_ON_SCHEDULE, true),
+  paperAccount = createPaperAccount()
 } = {}) {
   const clients = new Set();
   const providerStatus = {
@@ -210,6 +226,11 @@ export function createHttpServer({
   let lastBestSignalKey = null;
   let lastMarketContext = null;
   let lastMarketReversalSignal = null;
+  let latestPaperAccountSnapshot = paperAccount.snapshot?.() ?? null;
+  let latestScoredTradeIdeas = [];
+  let latestStrategyPolicy = null;
+  let latestStorageInfo = defaultDataStoreInfo();
+  let latestPerformanceAttribution = buildPerformanceAttribution();
   let latestLongTermRegime = null;
   let latestPythonModelBrainStatus = {
     ok: false,
@@ -257,30 +278,80 @@ export function createHttpServer({
     recentSignals.splice(100);
   }
 
+  function currentTradeIdeaMap() {
+    if (latestScoredTradeIdeas.length === 0) return tradeIdeas;
+    return new Map(latestScoredTradeIdeas.map((idea) => [idea.symbol, idea]));
+  }
+
+  function scoreTradeIdeaSnapshot(marketContext) {
+    return Array.from(tradeIdeas.values())
+      .map((idea) => scoreTradeIdea(idea, { marketContext }) ?? {
+        ...idea,
+        convictionScore: null,
+        confidence: "LOW",
+        factors: [],
+        supporting: [],
+        risks: ["当前方向为中性或数据不足，未生成综合分。"]
+      })
+      .sort((left, right) => {
+        const rightScore = Number(right.convictionScore ?? -1);
+        const leftScore = Number(left.convictionScore ?? -1);
+        if (rightScore !== leftScore) return rightScore - leftScore;
+        return Number(right.winProbability ?? 0) - Number(left.winProbability ?? 0);
+      });
+  }
+
   function updateBestSignal() {
+    const generatedAt = Date.now();
     const marketContext = inferMarketContext({
       tradeIdeas: Array.from(tradeIdeas.values()),
       commodities: tickerStore.getAll({ market: "commodities" }),
       longTermRegime: latestLongTermRegime
     });
+    const rawScoredTradeIdeas = scoreTradeIdeaSnapshot(marketContext);
+    latestStrategyPolicy = deriveStrategyPolicy({
+      scoredIdeas: rawScoredTradeIdeas,
+      marketContext,
+      now: generatedAt
+    });
+    latestScoredTradeIdeas = applyStrategyPolicyToIdeas(rawScoredTradeIdeas, latestStrategyPolicy);
 
     bestSignal = buildBestSignal({
-      tradeIdeas: Array.from(tradeIdeas.values()),
+      tradeIdeas: latestScoredTradeIdeas,
       marketContext,
-      generatedAt: Date.now()
+      minimumConviction: latestStrategyPolicy.minConviction,
+      strategyPolicy: latestStrategyPolicy,
+      generatedAt
     });
+
+    try {
+      latestPaperAccountSnapshot = paperAccount.processSignals?.({
+        bestSignal,
+        ideas: latestScoredTradeIdeas,
+        strategyPolicy: latestStrategyPolicy,
+        now: generatedAt
+      }) ?? paperAccount.snapshot?.(generatedAt) ?? latestPaperAccountSnapshot;
+    } catch (error) {
+      latestPaperAccountSnapshot = {
+        ...(paperAccount.snapshot?.(generatedAt) ?? latestPaperAccountSnapshot ?? {}),
+        error: error.message
+      };
+    }
 
     const marketReversalSignal = buildMarketReversalSignal({
       previousContext: lastMarketContext,
       marketContext,
       bestSignal,
-      generatedAt: Date.now()
+      generatedAt
     });
     if (marketReversalSignal) {
       lastMarketReversalSignal = marketReversalSignal;
       recentSignals.unshift(marketReversalSignal);
       recentSignals.splice(100);
-      sendMarketReversalNotifications({ signal: marketReversalSignal }).catch(() => {});
+      sendMarketReversalNotifications({
+        signal: marketReversalSignal,
+        paperAccount: latestPaperAccountSnapshot
+      }).catch(() => {});
     }
     lastMarketContext = marketContext;
 
@@ -292,14 +363,17 @@ export function createHttpServer({
         marketContext,
         generatedAt: bestSignal.generatedAt
       });
-      sendBestSignalNotifications({ signal: bestSignal }).catch(() => {});
+      sendBestSignalNotifications({
+        signal: bestSignal,
+        paperAccount: latestPaperAccountSnapshot
+      }).catch(() => {});
     }
   }
 
   async function sendTopicStatusHeartbeats() {
     const candidates = topicStatusCandidateSymbols({
       topicMap: telegramTopicMap,
-      tradeIdeas
+      tradeIdeas: currentTradeIdeaMap()
     });
     if (candidates.length === 0) return;
 
@@ -307,7 +381,7 @@ export function createHttpServer({
     const nowMs = Date.now();
 
     for (const symbol of candidates) {
-      const idea = tradeIdeas.get(symbol);
+      const idea = currentTradeIdeaMap().get(symbol);
       let ticker = tickerForTopicStatus(symbol, tickers);
       if (!ticker && !idea) {
         ticker = await fetchFinnhubStockQuote({ symbol });
@@ -348,7 +422,7 @@ export function createHttpServer({
     });
     const plan = completeTopicPushPlan({
       topicMap: telegramTopicMap,
-      tradeIdeas,
+      tradeIdeas: currentTradeIdeaMap(),
       tickers: tickerStore.getAll(),
       skipSymbols
     });
@@ -364,6 +438,7 @@ export function createHttpServer({
           ...item,
           idea: item.idea ? { ...item.idea, marketContext } : item.idea,
           ticker,
+          paperAccount: latestPaperAccountSnapshot,
           telegram: { topicMap: telegramTopicMap }
         });
 
@@ -387,12 +462,13 @@ export function createHttpServer({
     });
     const nowMs = Date.now();
     const alerts = selectOpportunityAlerts({
-      tradeIdeas: Array.from(tradeIdeas.values()),
+      tradeIdeas: latestScoredTradeIdeas.length ? latestScoredTradeIdeas : Array.from(tradeIdeas.values()),
       marketContext,
       lastAlerts: lastOpportunityAlerts,
       skipSymbols,
       nowMs,
-      cooldownMs: opportunityAlertCooldownMs
+      cooldownMs: opportunityAlertCooldownMs,
+      strategyPolicy: latestStrategyPolicy
     });
 
     for (const alert of alerts) {
@@ -411,7 +487,7 @@ export function createHttpServer({
         marketContext,
         generatedAt: idea.generatedAt ?? new Date(nowMs).toISOString()
       });
-      await sendTradeIdeaNotifications({ idea });
+      await sendTradeIdeaNotifications({ idea, paperAccount: latestPaperAccountSnapshot });
       lastOpportunityAlerts.set(idea.symbol, {
         stateKey: alert.stateKey,
         direction: idea.direction,
@@ -466,7 +542,13 @@ export function createHttpServer({
       concurrency: decisionKlineConcurrency
     });
     const signalMemoryRecords = loadSignalMemory();
+    const paperTrades = getDefaultDataStore().loadPaperTrades?.() ?? [];
     const strategyStats = summarizeSignalPerformance(signalMemoryRecords);
+    latestPerformanceAttribution = buildPerformanceAttribution({
+      signalRecords: signalMemoryRecords,
+      paperTrades,
+      now: Date.now()
+    });
     const longTermRegimeBySymbol = new Map();
     const externalModelSignals = loadExternalModelSignals();
 
@@ -522,10 +604,17 @@ export function createHttpServer({
           currentPrice: routedIdea.entry,
           candles
         });
-        const strategyFeedback = buildStrategyFeedback(signalMemoryRecords, {
+        const baseStrategyFeedback = buildStrategyFeedback(signalMemoryRecords, {
           symbol: displaySymbol,
           direction: routedIdea.direction
         });
+        const strategyFeedback = buildAttributionStrategyFeedback(
+          baseStrategyFeedback,
+          attributionSliceForIdea(latestPerformanceAttribution, {
+            symbol: displaySymbol,
+            direction: routedIdea.direction
+          })
+        );
         const reviewedIdea = {
           ...routedIdea,
           strategyStats,
@@ -550,13 +639,19 @@ export function createHttpServer({
             ...reviewedIdea,
             marketContext: ideaMarketContext
           };
-          const scoredNotificationIdea = scoreTradeIdea(notificationIdea, { marketContext: ideaMarketContext }) ?? notificationIdea;
+          const scoredNotificationIdea = applyStrategyPolicyToIdea(
+            scoreTradeIdea(notificationIdea, { marketContext: ideaMarketContext }) ?? notificationIdea,
+            latestStrategyPolicy
+          );
           appendSignalMemory({
             idea: scoredNotificationIdea,
             marketContext: ideaMarketContext,
             generatedAt: scoredNotificationIdea.generatedAt
           });
-          sendTradeIdeaNotifications({ idea: scoredNotificationIdea }).catch(() => {});
+          sendTradeIdeaNotifications({
+            idea: scoredNotificationIdea,
+            paperAccount: latestPaperAccountSnapshot
+          }).catch(() => {});
           changedDirectionSymbols.add(displaySymbol);
         }
       } catch {
@@ -777,6 +872,7 @@ export function createHttpServer({
   }
 
   function snapshotPayload() {
+    latestStorageInfo = defaultDataStoreInfo();
     const tickers = tickerStore.getSnapshot({ quoteAsset: "USDT", market: "crypto", limit: 800 });
     const stocks = tickerStore.getAll({ market: "stocks" })
       .sort((left, right) => right.quoteVolume - left.quoteVolume);
@@ -811,8 +907,13 @@ export function createHttpServer({
       decisionSchedule: latestDecisionSchedule,
       opportunityScanSchedule: latestOpportunityScanSchedule,
       pythonModelBrain: latestPythonModelBrainStatus,
-      tradeIdeas: Array.from(tradeIdeas.values())
-        .sort((left, right) => right.winProbability - left.winProbability),
+      storage: latestStorageInfo,
+      performanceAttribution: latestPerformanceAttribution,
+      paperAccount: latestPaperAccountSnapshot,
+      strategyPolicy: latestStrategyPolicy,
+      tradeIdeas: latestScoredTradeIdeas.length
+        ? latestScoredTradeIdeas
+        : Array.from(tradeIdeas.values()).sort((left, right) => right.winProbability - left.winProbability),
       bestSignal,
       marketReversalSignal: lastMarketReversalSignal
     };
@@ -838,7 +939,11 @@ export function createHttpServer({
         tickers: tickerStore.size(),
         decisionSchedule: latestDecisionSchedule,
         opportunityScanSchedule: latestOpportunityScanSchedule,
-        pythonModelBrain: latestPythonModelBrainStatus
+        pythonModelBrain: latestPythonModelBrainStatus,
+        storage: latestStorageInfo,
+        performanceAttribution: latestPerformanceAttribution,
+        paperAccount: latestPaperAccountSnapshot,
+        strategyPolicy: latestStrategyPolicy
       });
       return;
     }
@@ -858,8 +963,8 @@ export function createHttpServer({
 
     if (url.pathname === "/api/trade-ideas") {
       sendJson(response, 200, {
-        count: tradeIdeas.size,
-        ideas: Array.from(tradeIdeas.values())
+        count: latestScoredTradeIdeas.length || tradeIdeas.size,
+        ideas: latestScoredTradeIdeas.length ? latestScoredTradeIdeas : Array.from(tradeIdeas.values())
       });
       return;
     }
@@ -868,6 +973,16 @@ export function createHttpServer({
       sendJson(response, 200, {
         signal: bestSignal
       });
+      return;
+    }
+
+    if (url.pathname === "/api/paper-account") {
+      sendJson(response, 200, latestPaperAccountSnapshot ?? paperAccount.snapshot?.() ?? {});
+      return;
+    }
+
+    if (url.pathname === "/api/performance-attribution") {
+      sendJson(response, 200, latestPerformanceAttribution);
       return;
     }
 
