@@ -517,7 +517,6 @@ export function formatTopicStatusMessage({ symbol, idea, ticker } = {}) {
   if (idea) {
     const scored = scoreForMessage(idea);
     return [
-      "📡 Topic 数据更新",
       `🎯 标的: ${scored.symbol ?? normalizedSymbol}`,
       metadata ? `公司: ${metadata.companyName}` : null,
       `${directionEmoji(scored.direction)} 状态: ${scored.direction ?? "NEUTRAL"} | ${scored.action ?? "WAIT"}`,
@@ -540,7 +539,6 @@ export function formatTopicStatusMessage({ symbol, idea, ticker } = {}) {
   }
 
   return [
-    "📡 Topic 数据更新",
     `🎯 标的: ${normalizedSymbol}`,
     metadata ? `公司: ${metadata.companyName}` : null,
     "状态: 无完整K线策略",

@@ -1147,7 +1147,8 @@ test("formats topic status messages for stocks without a complete strategy", () 
     }
   });
 
-  assert.ok(text.startsWith("📡 Topic 数据更新"));
+  assert.ok(text.startsWith("🎯 标的: MCDUSDT"));
+  assert.equal(text.includes("📡 Topic 数据更新"), false);
   assert.ok(text.includes("🎯 标的: MCDUSDT"));
   assert.ok(text.includes("公司: McDonald's Corporation"));
   assert.ok(text.includes("状态: 无完整K线策略"));
@@ -1195,7 +1196,7 @@ test("topic status notifications route neutral or no-strategy updates to the mat
   assert.equal(result.telegram.ok, true);
   const body = JSON.parse(calls[0].options.body);
   assert.equal(body.message_thread_id, 529);
-  assert.ok(body.text.includes("Topic 数据更新"));
+  assert.equal(body.text.includes("📡 Topic 数据更新"), false);
   assert.ok(body.text.includes("🎯 标的: MCDUSDT"));
   assert.ok(body.text.endsWith("北京时间: 2026-06-05 04:06:07"));
 });
