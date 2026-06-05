@@ -4,6 +4,10 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { createDataStore } from "./data-store.js";
+import {
+  evaluatePositionRisk,
+  positionRiskConfigFromEnv
+} from "./position-risk.js";
 
 const defaultAccountPath = path.join(process.cwd(), "data", "paper-account.json");
 const defaultTradesPath = path.join(process.cwd(), "data", "paper-trades.jsonl");
@@ -248,7 +252,7 @@ function buildStats(state, now) {
 
 function createInitialState(config) {
   return {
-    version: 1,
+    version: 2,
     mode: "paper",
     initialBalance: config.initialBalance,
     balance: config.initialBalance,
@@ -257,7 +261,9 @@ function createInitialState(config) {
     maxDrawdownPercent: 0,
     nextPositionId: 1,
     openPositions: [],
+    openHistory: [],
     closedTrades: [],
+    riskEvents: [],
     equityCurve: [],
     updatedAt: null
   };
@@ -277,12 +283,15 @@ function normalizeState(raw, config) {
     maxDrawdownPercent: finiteNumber(raw.maxDrawdownPercent, 0),
     nextPositionId: Math.max(1, Math.trunc(finiteNumber(raw.nextPositionId, 1))),
     openPositions: Array.isArray(raw.openPositions) ? raw.openPositions : [],
+    openHistory: Array.isArray(raw.openHistory) ? raw.openHistory.slice(-500) : [],
     closedTrades: Array.isArray(raw.closedTrades) ? raw.closedTrades : [],
+    riskEvents: Array.isArray(raw.riskEvents) ? raw.riskEvents.slice(-200) : [],
     equityCurve: Array.isArray(raw.equityCurve) ? raw.equityCurve.slice(-500) : []
   };
 }
 
 function loadState(config) {
+  if (!config.accountPath) return createInitialState(config);
   if (!existsSync(config.accountPath)) return createInitialState(config);
 
   try {
@@ -331,6 +340,17 @@ function closePosition({ state, config, store, position, exitPrice, reason, now 
 
   state.balance = roundMoney(state.balance + tradeGrossPnl - exitFee);
   state.closedTrades.push(trade);
+  state.openHistory = state.openHistory.map((entry) => entry.id === position.id
+    ? {
+        ...entry,
+        status: "CLOSED",
+        closedAt,
+        closeReason: reason,
+        exitPrice: round(exitPrice, 8),
+        netPnl: roundMoney(netPnl),
+        returnPercent: trade.returnPercent
+      }
+    : entry);
   store.appendPaperTrade(trade);
   return trade;
 }
@@ -395,13 +415,30 @@ function markPosition(position, idea, config, now) {
   };
 }
 
-function openPosition({ state, config, idea, now }) {
+function openPosition({ state, config, idea, stats, now }) {
   const levels = plannedLevels(idea);
   if (!levels) return null;
 
+  const riskPlan = evaluatePositionRisk({
+    state,
+    stats,
+    idea,
+    config,
+    now
+  });
+  if (!riskPlan.ok) {
+    state.riskEvents.push({
+      ...riskPlan,
+      skippedSymbol: idea.symbol,
+      skippedDirection: idea.direction
+    });
+    state.riskEvents = state.riskEvents.slice(-200);
+    return null;
+  }
+
   const stopDistance = Math.abs(levels.entry - levels.stopLoss);
   const equity = Math.max(1, finiteNumber(state.equity, state.balance));
-  const riskBudget = equity * config.riskPerTrade;
+  const riskBudget = riskPlan.riskAmount;
   if (stopDistance <= 0 || riskBudget <= 0) return null;
 
   const side = actionForDirection(idea.direction);
@@ -428,6 +465,10 @@ function openPosition({ state, config, idea, now }) {
     quantity,
     notional: roundMoney(notional),
     entryFee: roundMoney(entryFee),
+    riskAmount: roundMoney(riskBudget),
+    riskFraction: riskPlan.riskFraction,
+    riskBucket: riskPlan.bucket,
+    positionRisk: riskPlan,
     takeProfit: round(levels.takeProfit, 8),
     stopLoss: round(levels.stopLoss, 8),
     riskReward: finiteNumber(idea.riskReward, 0),
@@ -448,6 +489,30 @@ function openPosition({ state, config, idea, now }) {
   state.nextPositionId += 1;
   state.balance = roundMoney(state.balance - entryFee);
   state.openPositions.push(position);
+  state.openHistory.push({
+    id: position.id,
+    status: "OPEN",
+    symbol: position.symbol,
+    direction: position.direction,
+    action: position.action,
+    openedAt: position.openedAt,
+    entryPrice: position.entryPrice,
+    takeProfit: position.takeProfit,
+    stopLoss: position.stopLoss,
+    quantity: position.quantity,
+    notional: position.notional,
+    riskAmount: position.riskAmount,
+    riskFraction: position.riskFraction,
+    riskBucket: position.riskBucket,
+    riskReward: position.riskReward,
+    convictionScore: position.convictionScore,
+    confidence: position.confidence,
+    winProbability: position.winProbability,
+    dataSource: position.dataSource,
+    tradePlaybook: position.tradePlaybook,
+    reason: position.reason
+  });
+  state.openHistory = state.openHistory.slice(-500);
   return position;
 }
 
@@ -465,11 +530,12 @@ export function paperAccountConfigFromEnv(env = process.env) {
     minConfidence: env.PAPER_MIN_CONFIDENCE || "MEDIUM",
     minPlaybookScore: clamp(numberFromEnv(env.PAPER_MIN_PLAYBOOK_SCORE, 0.5), 0, 1),
     adaptiveThresholds: boolFromEnv(env.PAPER_ADAPTIVE_THRESHOLDS, true),
+    positionRisk: positionRiskConfigFromEnv(env),
     dataStoreMode: env.DATA_STORE ?? env.STORAGE_BACKEND ?? "auto",
     sqlitePath: env.SQLITE_DB_PATH ?? path.join(process.cwd(), "data", "market-monitor.sqlite"),
     requireExecute: boolFromEnv(env.PAPER_REQUIRE_EXECUTE, false),
-    feeRate: clamp(numberFromEnv(env.PAPER_FEE_RATE, 0), 0, 0.02),
-    slippageBps: clamp(numberFromEnv(env.PAPER_SLIPPAGE_BPS, 0), 0, 200)
+    feeRate: 0,
+    slippageBps: 0
   };
 }
 
@@ -495,9 +561,12 @@ export function createPaperAccount(config = paperAccountConfigFromEnv()) {
       peakEquity: roundMoney(state.peakEquity),
       maxDrawdownPercent: state.maxDrawdownPercent,
       openPositionCount: state.openPositions.length,
+      openHistoryCount: state.openHistory.length,
       closedTradeCount: state.closedTrades.length,
       openPositions: state.openPositions,
+      recentOpenHistory: state.openHistory.slice(-50).reverse(),
       recentClosedTrades: state.closedTrades.slice(-30).reverse(),
+      recentRiskEvents: state.riskEvents.slice(-30).reverse(),
       equityCurve: state.equityCurve.slice(-200),
       stats,
       config: {
@@ -509,6 +578,7 @@ export function createPaperAccount(config = paperAccountConfigFromEnv()) {
         minConfidence: config.minConfidence,
         minPlaybookScore: config.minPlaybookScore,
         adaptiveThresholds: config.adaptiveThresholds,
+        positionRisk: config.positionRisk,
         requireExecute: config.requireExecute,
         feeRate: config.feeRate,
         slippageBps: config.slippageBps
@@ -567,7 +637,7 @@ export function createPaperAccount(config = paperAccountConfigFromEnv()) {
     for (const idea of candidates) {
       if (state.openPositions.length >= config.maxOpenPositions) break;
       if (state.openPositions.some((position) => position.symbol === idea.symbol)) continue;
-      openPosition({ state, config, idea, now });
+      openPosition({ state, config, idea, stats: buildStats(state, now), now });
     }
 
     updateEquity(state, config, now);

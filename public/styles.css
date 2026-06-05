@@ -166,6 +166,7 @@ select {
 .best-signal,
 .paper-account,
 .performance-attribution,
+.probability-calibration,
 .active-markets {
   margin-bottom: 16px;
 }
@@ -338,6 +339,96 @@ select {
   color: var(--muted);
   display: grid;
   place-items: center;
+}
+
+.risk-note {
+  margin: 12px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  color: var(--muted);
+  background: #fbfcfb;
+  font-size: 12px;
+}
+
+.paper-history {
+  margin-top: 14px;
+}
+
+.paper-subtitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.paper-subtitle h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.paper-subtitle span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.paper-history-list {
+  display: grid;
+  gap: 8px;
+}
+
+.paper-history-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(180px, 1.1fr) minmax(260px, 1.4fr);
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: #fbfcfb;
+}
+
+.paper-history-row > div {
+  min-width: 0;
+}
+
+.paper-history-row strong,
+.paper-history-row span,
+.paper-history-row b {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.paper-history-row span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.paper-history-row b {
+  margin-top: 3px;
+  font-size: 13px;
+}
+
+.paper-history-row dl {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.paper-history-row dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.paper-history-row dd {
+  margin: 2px 0 0;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 
 .attribution-main {

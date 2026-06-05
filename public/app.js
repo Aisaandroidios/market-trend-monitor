@@ -21,6 +21,8 @@ const paperAccountCard = document.querySelector("#paperAccountCard");
 const paperAccountContext = document.querySelector("#paperAccountContext");
 const attributionCard = document.querySelector("#attributionCard");
 const attributionContext = document.querySelector("#attributionContext");
+const calibrationCard = document.querySelector("#calibrationCard");
+const calibrationContext = document.querySelector("#calibrationContext");
 
 let tickers = [];
 let stocks = [];
@@ -32,6 +34,7 @@ let activeMarkets = { crypto: [], stocks: [], commodities: [] };
 let paperAccount = null;
 let strategyPolicy = null;
 let performanceAttribution = null;
+let probabilityCalibration = null;
 
 function formatNumber(value, maximumFractionDigits = 8) {
   return new Intl.NumberFormat("en-US", {
@@ -152,7 +155,7 @@ function renderTradeIdeas() {
         </div>
         <div class="trade-main">
           <b>${Math.round(idea.winProbability * 100)}%</b>
-          <span>估算胜率</span>
+          <span>${idea.probabilityCalibration?.status === "ok" ? "校准胜率" : "估算胜率"}</span>
         </div>
         <dl>
           <div><dt>综合分</dt><dd>${idea.convictionScore ?? "--"}</dd></div>
@@ -160,6 +163,8 @@ function renderTradeIdeas() {
           <div><dt>止盈</dt><dd>${idea.takeProfit}</dd></div>
           <div><dt>止损</dt><dd>${idea.stopLoss}</dd></div>
           <div><dt>R/R</dt><dd>${idea.riskReward}</dd></div>
+          <div><dt>WF</dt><dd>${idea.walkForward?.status === "ok" ? `${idea.walkForward.testMetrics?.winRate ?? 0}%` : "--"}</dd></div>
+          <div><dt>原始胜率</dt><dd>${idea.rawWinProbability ? `${Math.round(idea.rawWinProbability * 100)}%` : "--"}</dd></div>
           <div><dt>支撑</dt><dd>${idea.support}</dd></div>
           <div><dt>压力</dt><dd>${idea.resistance}</dd></div>
           <div><dt>RSI</dt><dd>${idea.indicators?.rsi ?? "--"}</dd></div>
@@ -242,6 +247,7 @@ function renderBestSignal() {
       </div>
       <div class="factor-list">
         ${(bestSignal.supporting ?? []).slice(0, 3).map((item) => `<span>${item}</span>`).join("")}
+        ${bestSignal.walkForward?.status === "ok" ? `<span>Walk-forward ${bestSignal.walkForward.testMetrics?.winRate ?? 0}% · ${bestSignal.walkForward.supportDirection}</span>` : ""}
       </div>
     </article>
   `;
@@ -262,6 +268,8 @@ function renderPaperAccount() {
   paperAccountContext.textContent = `${paperAccount.openPositionCount ?? 0} 仓位 · ${updatedAt}`;
 
   const openPositions = paperAccount.openPositions ?? [];
+  const openHistory = paperAccount.recentOpenHistory ?? [];
+  const lastRiskEvent = paperAccount.recentRiskEvents?.[0];
   const positionHtml = openPositions.length === 0
     ? `<p class="paper-empty">当前无模拟持仓</p>`
     : openPositions.slice(0, 4).map((position) => {
@@ -274,9 +282,39 @@ function renderPaperAccount() {
             </div>
             <dl>
               <div><dt>入场</dt><dd>${position.entryPrice}</dd></div>
+              <div><dt>风险</dt><dd>${formatMoney(position.riskAmount)}</dd></div>
               <div><dt>现价</dt><dd>${position.currentPrice}</dd></div>
               <div><dt>浮盈亏</dt><dd class="${(position.unrealizedPnl ?? 0) >= 0 ? "positive" : "negative"}">${formatMoney(position.unrealizedPnl)}</dd></div>
               <div><dt>RR</dt><dd>${position.riskReward}</dd></div>
+            </dl>
+          </article>
+        `;
+      }).join("");
+  const historyHtml = openHistory.length === 0
+    ? `<p class="paper-empty">暂无开仓历史</p>`
+    : openHistory.slice(0, 8).map((entry) => {
+        const directionClass = entry.direction === "LONG" ? "positive" : "negative";
+        const statusClass = entry.status === "OPEN" ? "positive" : (entry.netPnl ?? 0) >= 0 ? "positive" : "negative";
+        const openedAt = entry.openedAt ? new Date(entry.openedAt).toLocaleString() : "--";
+        const result = entry.status === "CLOSED"
+          ? `${entry.closeReason ?? "CLOSED"} · ${formatMoney(entry.netPnl)}`
+          : `持仓中 · 风险 ${formatMoney(entry.riskAmount)}`;
+
+        return `
+          <article class="paper-history-row">
+            <div>
+              <strong>${entry.symbol}</strong>
+              <span class="${directionClass}">${entry.direction}</span>
+            </div>
+            <div>
+              <span>${openedAt}</span>
+              <b class="${statusClass}">${result}</b>
+            </div>
+            <dl>
+              <div><dt>入场</dt><dd>${entry.entryPrice}</dd></div>
+              <div><dt>止盈</dt><dd>${entry.takeProfit}</dd></div>
+              <div><dt>止损</dt><dd>${entry.stopLoss}</dd></div>
+              <div><dt>分数</dt><dd>${entry.convictionScore ?? "--"}</dd></div>
             </dl>
           </article>
         `;
@@ -309,9 +347,27 @@ function renderPaperAccount() {
           <span>总交易</span>
           <strong>${totalStats.trades ?? 0}</strong>
         </div>
+        <div>
+          <span>风险上限</span>
+          <strong>${Math.round((paperAccount.config?.positionRisk?.maxRiskPerTrade ?? 0) * 10000) / 100}%</strong>
+        </div>
+        <div>
+          <span>连亏</span>
+          <strong>${lastRiskEvent?.consecutiveLosses ?? 0}</strong>
+        </div>
       </div>
+      ${lastRiskEvent ? `<p class="risk-note">最近风控: ${lastRiskEvent.skippedSymbol ?? lastRiskEvent.symbol} · ${lastRiskEvent.summary}</p>` : ""}
       <div class="paper-positions">
         ${positionHtml}
+      </div>
+      <div class="paper-history">
+        <div class="paper-subtitle">
+          <h3>开仓历史</h3>
+          <span>最近 ${Math.min(openHistory.length, 8)} / ${paperAccount.openHistoryCount ?? openHistory.length}</span>
+        </div>
+        <div class="paper-history-list">
+          ${historyHtml}
+        </div>
       </div>
     </article>
   `;
@@ -384,6 +440,74 @@ function renderAttribution() {
   `;
 }
 
+function calibrationBucketLine(bucket) {
+  const tone = bucket.realizedRate >= bucket.predictedAvg ? "positive-tint" : "negative-tint";
+  return `
+    <article class="attribution-item ${tone}">
+      <div>
+        <strong>${bucket.key}%</strong>
+        <span>样本 ${bucket.samples} · 预测 ${bucket.predictedAvg}% · 真实 ${bucket.realizedRate}%</span>
+      </div>
+      <b>${bucket.calibrationError}%</b>
+    </article>
+  `;
+}
+
+function renderProbabilityCalibration() {
+  const overall = probabilityCalibration?.overall;
+  if (!overall) {
+    calibrationCard.innerHTML = `<p class="empty-inline">等待分桶复盘样本...</p>`;
+    calibrationContext.textContent = "等待校准";
+    return;
+  }
+
+  calibrationContext.textContent = `${probabilityCalibration.status} · 样本 ${overall.samples}`;
+  const buckets = probabilityCalibration.buckets ?? [];
+  calibrationCard.innerHTML = `
+    <article class="attribution-main">
+      <div class="attribution-summary">
+        <div>
+          <span>真实胜率</span>
+          <strong>${overall.realizedRate}%</strong>
+        </div>
+        <div>
+          <span>平均预测</span>
+          <strong>${overall.predictedAvg}%</strong>
+        </div>
+        <div>
+          <span>校准误差</span>
+          <strong>${overall.expectedCalibrationError}%</strong>
+        </div>
+        <div>
+          <span>Brier</span>
+          <strong>${overall.brierScore}</strong>
+        </div>
+      </div>
+      <div class="attribution-columns">
+        <div>
+          <h3>概率分桶</h3>
+          ${buckets.length ? buckets.slice(-4).map(calibrationBucketLine).join("") : `<p class="paper-empty">分桶样本不足</p>`}
+        </div>
+        <div>
+          <h3>方向校准</h3>
+          ${["long", "short"].map((key) => {
+            const stats = probabilityCalibration.directions?.[key] ?? {};
+            return `
+              <article class="attribution-item">
+                <div>
+                  <strong>${key.toUpperCase()}</strong>
+                  <span>样本 ${stats.samples ?? 0} · 成 ${stats.successes ?? 0} · 败 ${stats.failures ?? 0}</span>
+                </div>
+                <b>${stats.realizedRate ?? 0}%</b>
+              </article>
+            `;
+          }).join("")}
+        </div>
+      </div>
+    </article>
+  `;
+}
+
 function applyPayload(payload) {
   tickers = payload.tickers;
   stocks = payload.stocks ?? [];
@@ -395,6 +519,7 @@ function applyPayload(payload) {
   paperAccount = payload.paperAccount ?? null;
   strategyPolicy = payload.strategyPolicy ?? null;
   performanceAttribution = payload.performanceAttribution ?? null;
+  probabilityCalibration = payload.probabilityCalibration ?? null;
   cryptoCount.textContent = String(payload.counts?.crypto ?? tickers.length);
   stockCount.textContent = String(payload.counts?.stocks ?? stocks.length);
   commodityCount.textContent = String(payload.counts?.commodities ?? commodities.length);
@@ -410,6 +535,7 @@ function applyPayload(payload) {
   renderBestSignal();
   renderPaperAccount();
   renderAttribution();
+  renderProbabilityCalibration();
   renderTradeIdeas();
   renderActiveMarkets();
   render();

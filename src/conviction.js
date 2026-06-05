@@ -1,5 +1,6 @@
 import { movingAverage } from "./indicators.js";
 import { scoreOpenSourceModelBrain } from "./model-brain.js";
+import { walkForwardScoreForDirection } from "./walk-forward.js";
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -82,6 +83,16 @@ function probabilityScore(idea) {
   return clamp((idea.winProbability - 0.45) / 0.3, 0, 1);
 }
 
+function probabilityNote(idea) {
+  const calibrated = Number(idea.winProbability ?? 0);
+  const raw = Number(idea.rawWinProbability ?? idea.winProbability ?? 0);
+  const calibration = idea.probabilityCalibration;
+  if (calibration?.status === "ok") {
+    return `校准胜率 ${(calibrated * 100).toFixed(0)}%，原始 ${(raw * 100).toFixed(0)}%，分桶真实胜率 ${calibration.realizedRate}%`;
+  }
+  return `胜率估算 ${(calibrated * 100).toFixed(0)}%`;
+}
+
 function levelRoomScore(idea) {
   const rewardRoom = Math.abs(idea.takeProfit - idea.entry);
   const stopRoom = Math.abs(idea.entry - idea.stopLoss);
@@ -134,6 +145,24 @@ function moneyFlowNote(idea) {
     : `资金流向${bias}，与${idea.direction}方向相反`;
 }
 
+function derivativesScore(idea) {
+  const derivatives = idea.derivatives;
+  if (!derivatives?.ok || !derivatives.biasDirection || derivatives.biasDirection === "NEUTRAL") return 0.5;
+  if (derivatives.biasDirection === idea.direction) return 1;
+  return 0.2;
+}
+
+function derivativesNote(idea) {
+  const derivatives = idea.derivatives;
+  if (!derivatives) return "衍生品/盘口数据未返回，按中性处理";
+  if (!derivatives.ok) return `衍生品/盘口数据不可用: ${derivatives.reason ?? derivatives.error ?? "unknown"}`;
+  const aligned = derivatives.biasDirection === idea.direction;
+  if (derivatives.biasDirection === "NEUTRAL") return `衍生品/盘口中性，${derivatives.detail}`;
+  return aligned
+    ? `衍生品/盘口偏 ${derivatives.biasDirection}，与当前方向一致；${derivatives.detail}`
+    : `衍生品/盘口偏 ${derivatives.biasDirection}，与当前方向相反；${derivatives.detail}`;
+}
+
 function volatilityScore(idea) {
   const atr = idea.indicators?.atr ?? 0;
   if (!idea.entry || !atr) return 0.5;
@@ -163,8 +192,24 @@ function modelBrainFactor(idea, marketContext) {
   const brain = scoreOpenSourceModelBrain(idea, { marketContext });
   return {
     brain,
-    factor: factor("open_source_model_brain", brain.score, 12, brain.note)
+    factor: factor("open_source_model_brain", brain.score, 7, brain.note)
   };
+}
+
+function walkForwardFactor(idea) {
+  const validation = idea.walkForward;
+  if (!validation) {
+    return factor("walk_forward_validation", 0.5, 7, "Walk-forward 样本未生成，按中性处理");
+  }
+
+  const score = walkForwardScoreForDirection(validation, idea.direction);
+  const metrics = validation.testMetrics ?? {};
+  const support = validation.supportDirection ?? "NEUTRAL";
+  const note = validation.status === "ok"
+    ? `Walk-forward 测试支持 ${support}，测试胜率 ${metrics.winRate ?? 0}%，期望R ${metrics.expectancyR ?? 0}，窗口 ${validation.positiveWindows ?? 0}/${validation.windows ?? 0}`
+    : validation.warnings?.[0] ?? "Walk-forward 数据不足，按中性处理";
+
+  return factor("walk_forward_validation", score, 7, note);
 }
 
 function supportingAndRisks(idea, factors) {
@@ -176,11 +221,23 @@ function supportingAndRisks(idea, factors) {
     .map((item) => item.note);
 
   if (idea.winProbability < 0.6) risks.push("胜率估算没有达到高置信区间");
+  if (idea.probabilityCalibration?.adjustmentPercent < -3) {
+    risks.push(`胜率校准下调 ${Math.abs(idea.probabilityCalibration.adjustmentPercent)}%，原始概率偏乐观`);
+  }
   if ((idea.indicators?.newsScore ?? 0) === 0) {
     risks.push(idea.news?.detail ?? "新闻情绪未配置或当前为中性");
   }
   if (idea.riskReward < 1.5) risks.push("风险收益比偏低");
   if (idea.action === "WAIT") risks.push("交易动作仍为 WAIT，说明当前只是观察方向，不是立即开单。");
+  if (idea.walkForward?.warnings?.length) risks.push(idea.walkForward.warnings[0]);
+  if (idea.walkForward?.status === "ok" && idea.walkForward.supportDirection !== "NEUTRAL" && idea.walkForward.supportDirection !== idea.direction) {
+    risks.push(`Walk-forward 未来窗口更支持 ${idea.walkForward.supportDirection}，与当前 ${idea.direction} 相反`);
+  }
+  if (idea.derivatives?.ok && idea.derivatives.biasDirection !== "NEUTRAL" && idea.derivatives.biasDirection !== idea.direction) {
+    risks.push(`衍生品/盘口偏 ${idea.derivatives.biasDirection}，与当前 ${idea.direction} 相反`);
+  }
+  if (idea.eventRisk?.status === "block") risks.push(`事件风险 BLOCK: ${idea.eventRisk.detail}`);
+  if (idea.eventRisk?.status === "reduce") risks.push(`事件风险 REDUCE: ${idea.eventRisk.detail}`);
 
   return { supporting, risks };
 }
@@ -192,17 +249,19 @@ export function scoreTradeIdea(idea, { marketContext = {} } = {}) {
 
   const modelBrain = modelBrainFactor(idea, marketContext);
   const factors = [
-    factor("win_probability", probabilityScore(idea), 14, `胜率估算 ${(idea.winProbability * 100).toFixed(0)}%`),
-    factor("risk_reward", riskRewardScore(idea), 11, `风险收益比 ${idea.riskReward}`),
-    factor("technical_trend", technicalTrendScore(idea), 13, idea.reason),
+    factor("win_probability", probabilityScore(idea), 12, probabilityNote(idea)),
+    factor("risk_reward", riskRewardScore(idea), 9, `风险收益比 ${idea.riskReward}`),
+    factor("technical_trend", technicalTrendScore(idea), 11, idea.reason),
     factor("support_resistance_room", levelRoomScore(idea), 7, `支撑 ${idea.support} / 压力 ${idea.resistance}`),
     factor("news_sentiment", newsScore(idea), 5, newsFactorNote(idea)),
-    factor("money_flow", moneyFlowScore(idea), 7, moneyFlowNote(idea)),
+    factor("money_flow", moneyFlowScore(idea), 6, moneyFlowNote(idea)),
     factor("volatility_control", volatilityScore(idea), 5, `ATR ${idea.indicators?.atr ?? "--"}`),
     factor("market_regime", directionAlignment(idea), 8, marketRegimeNote(idea)),
     factor("adaptive_feedback", adaptiveFeedbackScore(idea), 8, adaptiveFeedbackNote(idea)),
-    factor("execution_quality", executionQualityScore(idea), 10, executionQualityNote(idea)),
-    modelBrain.factor
+    factor("execution_quality", executionQualityScore(idea), 8, executionQualityNote(idea)),
+    modelBrain.factor,
+    walkForwardFactor(idea),
+    factor("derivatives_positioning", derivativesScore(idea), 7, derivativesNote(idea))
   ];
 
   const convictionScore = round(factors.reduce((sum, item) => sum + item.contribution, 0), 2);

@@ -53,8 +53,10 @@ import {
 } from "./signal-memory.js";
 import { fetchFinnhubStockQuote } from "./stock-quote.js";
 import { buildSnapshotTradeIdea } from "./snapshot-strategy.js";
-import { fetchTradingViewCandles } from "./tradingview-data.js";
-import { fetchYahooCandles } from "./yahoo-data.js";
+import {
+  fetchReferenceCandles,
+  referenceDataStatus
+} from "./reference-data.js";
 import { buildPythonModelSignals } from "./python-model-signals.js";
 import {
   shouldSendTopicStatusHeartbeat,
@@ -83,6 +85,16 @@ import {
   buildAttributionStrategyFeedback,
   buildPerformanceAttribution
 } from "./performance-attribution.js";
+import {
+  applyProbabilityCalibration,
+  buildProbabilityCalibration
+} from "./probability-calibration.js";
+import { fetchDerivativesSnapshotsConcurrent } from "./derivatives-data.js";
+import {
+  applyEventRiskToIdea,
+  buildEventRiskAssessment
+} from "./event-risk.js";
+import { buildModelGovernance } from "./model-governance.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -231,6 +243,8 @@ export function createHttpServer({
   let latestStrategyPolicy = null;
   let latestStorageInfo = defaultDataStoreInfo();
   let latestPerformanceAttribution = buildPerformanceAttribution();
+  let latestProbabilityCalibration = buildProbabilityCalibration();
+  let latestModelGovernance = buildModelGovernance();
   let latestLongTermRegime = null;
   let latestPythonModelBrainStatus = {
     ok: false,
@@ -533,6 +547,20 @@ export function createHttpServer({
     const futuresStatBySymbol = new Map(
       futuresStats.map((stat) => [String(stat.symbol ?? "").toUpperCase(), stat])
     );
+    let derivativesSnapshots = [];
+    try {
+      derivativesSnapshots = await fetchDerivativesSnapshotsConcurrent({
+        symbols: activeDecisionSymbols,
+        concurrency: Math.max(1, Math.min(4, decisionKlineConcurrency))
+      });
+    } catch {
+      derivativesSnapshots = [];
+    }
+    const derivativesBySymbol = new Map(
+      derivativesSnapshots
+        .filter((snapshot) => snapshot?.symbol)
+        .map((snapshot) => [snapshot.symbol, snapshot])
+    );
 
     const candleResults = await fetchBinanceCandlesConcurrent({
       symbols: activeDecisionSymbols,
@@ -544,6 +572,15 @@ export function createHttpServer({
     const signalMemoryRecords = loadSignalMemory();
     const paperTrades = getDefaultDataStore().loadPaperTrades?.() ?? [];
     const strategyStats = summarizeSignalPerformance(signalMemoryRecords);
+    latestProbabilityCalibration = buildProbabilityCalibration(signalMemoryRecords, {
+      now: Date.now()
+    });
+    latestModelGovernance = buildModelGovernance({
+      signalRecords: signalMemoryRecords,
+      probabilityCalibration: latestProbabilityCalibration,
+      providerStatus,
+      now: Date.now()
+    });
     latestPerformanceAttribution = buildPerformanceAttribution({
       signalRecords: signalMemoryRecords,
       paperTrades,
@@ -615,14 +652,21 @@ export function createHttpServer({
             direction: routedIdea.direction
           })
         );
-        const reviewedIdea = {
+        const eventRisk = buildEventRiskAssessment({
+          symbol: displaySymbol,
+          news: routedIdea.news,
+          now: Date.now()
+        });
+        const eventAdjustedIdea = applyEventRiskToIdea({
           ...routedIdea,
           strategyStats,
           strategyFeedback,
+          modelGovernance: latestModelGovernance,
           ...(displayLongTermRegime ? { longTermRegime: displayLongTermRegime } : {}),
           ...(modelSignal ? { modelSignal } : {}),
           ...(previousSignalReview ? { previousSignalReview } : {})
-        };
+        }, eventRisk);
+        const reviewedIdea = applyProbabilityCalibration(eventAdjustedIdea, latestProbabilityCalibration);
 
         tradeIdeas.set(displaySymbol, reviewedIdea);
         processedSymbols.add(displaySymbol);
@@ -676,6 +720,7 @@ export function createHttpServer({
         news,
         dataSource,
         futuresStat: futuresStatBySymbol.get(symbol),
+        derivatives: derivativesBySymbol.get(symbol),
         generatedAt: Date.now()
       });
 
@@ -686,18 +731,11 @@ export function createHttpServer({
       const displaySymbol = displaySymbolForBinanceSymbol(symbol);
       if (processedSymbols.has(displaySymbol)) continue;
 
-      let referenceResult = await fetchTradingViewCandles({
+      const referenceResult = await fetchReferenceCandles({
         symbol: displaySymbol,
         interval: "1h",
         limit: 120
       });
-      if (!referenceResult.ok || !referenceResult.candles?.length) {
-        referenceResult = await fetchYahooCandles({
-          symbol: displaySymbol,
-          interval: "1h",
-          limit: 120
-        });
-      }
       if (!referenceResult.ok || !referenceResult.candles?.length) continue;
 
       const price = referenceResult.candles.at(-1)?.close;
@@ -705,7 +743,7 @@ export function createHttpServer({
       const news = await getNewsInsight({ symbol: displaySymbol });
       const idea = buildTradeIdea({
         symbol: displaySymbol,
-        market: referenceResult.dataSource?.provider === "Yahoo Finance" ? "yahoo" : "tradingview",
+        market: String(referenceResult.dataSource?.provider ?? "reference").toLowerCase().replace(/\s+/g, "_"),
         price,
         candles: referenceResult.candles,
         newsScore: news.score,
@@ -725,27 +763,27 @@ export function createHttpServer({
       const normalizedSymbol = normalizeTelegramTopicSymbol(symbol);
       if (!normalizedSymbol || processedSymbols.has(normalizedSymbol)) continue;
 
-      const yahooResult = await fetchYahooCandles({
+      const referenceResult = await fetchReferenceCandles({
         symbol: normalizedSymbol,
         interval: "1h",
         limit: 120
       });
-      if (yahooResult.ok && yahooResult.candles?.length) {
-        const price = yahooResult.candles.at(-1)?.close;
+      if (referenceResult.ok && referenceResult.candles?.length) {
+        const price = referenceResult.candles.at(-1)?.close;
         if (price) {
           const news = await getNewsInsight({ symbol: normalizedSymbol });
           const idea = buildTradeIdea({
             symbol: normalizedSymbol,
-            market: "yahoo",
+            market: String(referenceResult.dataSource?.provider ?? "reference").toLowerCase().replace(/\s+/g, "_"),
             price,
-            candles: yahooResult.candles,
+            candles: referenceResult.candles,
             newsScore: news.score,
             news,
-            dataSource: yahooResult.dataSource,
+            dataSource: referenceResult.dataSource,
             generatedAt: Date.now()
           });
 
-          await storeReviewedIdea({ idea, sourceSymbol: normalizedSymbol, candles: yahooResult.candles });
+          await storeReviewedIdea({ idea, sourceSymbol: normalizedSymbol, candles: referenceResult.candles });
           continue;
         }
       }
@@ -909,6 +947,9 @@ export function createHttpServer({
       pythonModelBrain: latestPythonModelBrainStatus,
       storage: latestStorageInfo,
       performanceAttribution: latestPerformanceAttribution,
+      probabilityCalibration: latestProbabilityCalibration,
+      modelGovernance: latestModelGovernance,
+      referenceData: referenceDataStatus(),
       paperAccount: latestPaperAccountSnapshot,
       strategyPolicy: latestStrategyPolicy,
       tradeIdeas: latestScoredTradeIdeas.length
@@ -942,6 +983,9 @@ export function createHttpServer({
         pythonModelBrain: latestPythonModelBrainStatus,
         storage: latestStorageInfo,
         performanceAttribution: latestPerformanceAttribution,
+        probabilityCalibration: latestProbabilityCalibration,
+        modelGovernance: latestModelGovernance,
+        referenceData: referenceDataStatus(),
         paperAccount: latestPaperAccountSnapshot,
         strategyPolicy: latestStrategyPolicy
       });
@@ -983,6 +1027,16 @@ export function createHttpServer({
 
     if (url.pathname === "/api/performance-attribution") {
       sendJson(response, 200, latestPerformanceAttribution);
+      return;
+    }
+
+    if (url.pathname === "/api/probability-calibration") {
+      sendJson(response, 200, latestProbabilityCalibration);
+      return;
+    }
+
+    if (url.pathname === "/api/model-governance") {
+      sendJson(response, 200, latestModelGovernance);
       return;
     }
 

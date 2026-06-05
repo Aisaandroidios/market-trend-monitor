@@ -6,13 +6,18 @@
 
 ## 功能
 
-- 多数据源：Binance Futures、Hyperliquid、Stooq、Finnhub、Yahoo Finance，TradingView adapter 预留。
+- 多数据源：Binance Futures、Hyperliquid、Stooq、Yahoo Finance、Alpha Vantage、Finnhub、Twelve Data、Alpaca Market Data，TradingView adapter 预留。
 - Telegram Topic 路由：每个标的可以推送到对应 Topic。
 - 完整交易计划：方向、动作、入场、止盈、止损、胜率估算、风险收益比、支撑压力、执行条件。
 - 策略因子：技术面、新闻面、资金流向、长期趋势、历史复盘、交易员检查、模型大脑。
 - 开源模型大脑：Qlib-compatible、LightGBM-compatible、vectorbt-compatible、FinRL-compatible、Python Open Quant Brain。
 - 模拟实盘账户：用虚拟余额跟随信号开/平仓，记录权益、盈亏、回撤、日/周/月/年胜率，不会真实下单。
 - 策略归因：按标的、方向、市场状态、长期趋势、模型信心和模拟成交盈亏识别强项/弱项，并回流到历史反馈分。
+- Walk-forward 验证：用过去窗口选参数，再在未来窗口验证，避免一次性回测过拟合。
+- 胜率校准：按预测概率分桶复盘真实胜率，自动下调过度乐观的概率。
+- 仓位引擎：单笔风险上限、日/周亏损闸门、连续亏损降仓、同类资产风险限额、波动/低流动性过滤。
+- 衍生品/盘口因子：open interest、全市场多空比、mark/index 基差、盘口失衡。
+- 事件风险和模型治理：宏观/监管/财报/黑天鹅事件降权，最近 20/50/100 条表现漂移监控。
 - 美股交易时段感知：盘中、盘前、盘后、非交易时段、周末使用不同推送/扫描频率。
 - 本地 Dashboard：打开 `http://localhost:8787` 查看行情、策略和最高信号。
 
@@ -95,6 +100,9 @@ TELEGRAM_BOT_TOKEN=your-token node scripts/telegram-topics.js
 - `GET /api/signals`：最近趋势信号。
 - `GET /api/paper-account`：模拟实盘账户、持仓和绩效统计。
 - `GET /api/performance-attribution`：策略归因、强项/弱项和自动调参建议。
+- `GET /api/probability-calibration`：预测胜率分桶、真实胜率、校准误差和 Brier 分数。
+- `GET /api/model-governance`：最近 20/50/100 条表现、置信虚高、数据源异常和模型降权状态。
+- `GET /api/health` 里的 `referenceData`：当前参考 K 线 provider 顺序和已配置状态。
 
 ## 配置
 
@@ -105,11 +113,19 @@ TELEGRAM_BOT_TOKEN=your-token node scripts/telegram-topics.js
 - `TELEGRAM_TOPIC_MAP`
 - `ALPHA_VANTAGE_API_KEY`
 - `FINNHUB_API_KEY`
+- `TWELVE_DATA_API_KEY`
+- `ALPACA_API_KEY_ID`
+- `ALPACA_API_SECRET_KEY`
+- `REFERENCE_DATA_PROVIDERS`
 - `PYTHON_MODEL_BRAIN_ENABLED`
 - `YAHOO_DATA_ENABLED`
 - `OPPORTUNITY_SCAN_ENABLED`
 - `PAPER_TRADING_ENABLED`
 - `PAPER_INITIAL_BALANCE`
+- `WALK_FORWARD_ENABLED`
+- `PROBABILITY_CALIBRATION_BUCKET_SIZE`
+- `DERIVATIVES_DATA_ENABLED`
+- `EVENT_RISK_ENABLED`
 - `NOTIFICATION_SEND_ENABLED`
 - `DATA_STORE`
 - `SQLITE_DB_PATH`
@@ -131,9 +147,37 @@ SQLITE_DB_PATH=data/market-monitor.sqlite
 
 第一次启用 SQLite 时，如果本地已有 `data/signal-history.jsonl`、`data/paper-account.json` 或 `data/paper-trades.jsonl`，系统会自动导入到 SQLite。`/api/health` 会显示当前存储模式和数据库路径。
 
+## 免费参考数据源
+
+当某个 Topic 没有可用 Binance/Hyperliquid 合约 K 线时，系统会按 `REFERENCE_DATA_PROVIDERS` 的顺序拉取美股、ETF、黄金、白银、原油参考 K 线。任意 provider 失败、限流或未配置 key 都会自动跳过，继续尝试下一个：
+
+```env
+REFERENCE_DATA_PROVIDERS=tradingview,yahoo,alpha_vantage,twelve_data,alpaca,finnhub
+REFERENCE_DATA_TIMEOUT_MS=7000
+YAHOO_DATA_ENABLED=true
+TRADINGVIEW_DATA_ENABLED=false
+ALPHA_VANTAGE_API_KEY=your-free-key
+FINNHUB_API_KEY=your-free-key
+TWELVE_DATA_API_KEY=optional-free-key
+ALPACA_API_KEY_ID=optional-paper-or-broker-key
+ALPACA_API_SECRET_KEY=optional-secret
+ALPACA_DATA_FEED=iex
+```
+
+默认推荐顺序：
+
+- `tradingview`：需要本地安装 `tvDatafeed`，适合你已经在本机维护 TradingView adapter 的情况；默认关闭，避免依赖不稳定。
+- `yahoo`：通过 `yfinance` 免费拉取股票、ETF、期货连续合约参考 K 线，适合作为主 fallback。
+- `alpha_vantage`：免费 key 可拉美股/ETF intraday/daily；有频率限制。
+- `twelve_data`：免费 key 可作为股票/ETF/部分外汇/金属补充。
+- `alpaca`：著名券商/数据平台，填入 Alpaca paper/broker market data key 后可拉 IEX feed 股票 bars。
+- `finnhub`：保留为可配置补充源；不同账号权限可能限制 stock candle，失败时会自动 fallback。
+
+推送里的“数据/报价”会显示实际命中的 provider、交易所/平台和 quote symbol，方便你知道这条策略到底参考了谁的数据。
+
 ## 模拟实盘账户
 
-模拟账户只用于验证系统信号表现，不连接真实交易所账号，也不会发真实订单。默认配置使用虚拟本金 10000，每笔风险 2%，最多 6 个模拟持仓：
+模拟账户只用于验证系统信号表现，不连接真实交易所账号，也不会发真实订单。默认配置使用虚拟本金 10000，最多 6 个模拟持仓。基础风险参数仍可设为 2%，但仓位引擎会把有效单笔风险按专业风控默认限制在 0.25%-1%：
 
 ```env
 PAPER_TRADING_ENABLED=true
@@ -142,9 +186,15 @@ PAPER_RISK_PER_TRADE=0.02
 PAPER_MAX_OPEN_POSITIONS=6
 PAPER_FEE_RATE=0
 PAPER_SLIPPAGE_BPS=0
+PAPER_POSITION_RISK_ENABLED=true
+PAPER_MIN_RISK_PER_TRADE=0.0025
+PAPER_MAX_RISK_PER_TRADE=0.01
+PAPER_DAILY_MAX_LOSS_PCT=0.03
+PAPER_WEEKLY_MAX_LOSS_PCT=0.07
+PAPER_MAX_CONSECUTIVE_LOSSES=4
 ```
 
-系统会在每轮信号计算后，用当前入场、止盈、止损更新虚拟持仓。命中止盈/止损或出现同标的反向高置信信号时，模拟账户会平仓并记录盈亏。Telegram 的完整策略消息和 `/signal`、`/best` 主动查询会带上模拟余额、权益、累计胜率和当前持仓。
+系统会在每轮信号计算后，用当前入场、止盈、止损更新虚拟持仓。命中止盈/止损或出现同标的反向高置信信号时，模拟账户会平仓并记录盈亏。新开仓前会检查日/周亏损、连续亏损、同类资产风险、ATR/价格、成交量倍率和风险收益比；不合格的单会被记录为 `recentRiskEvents`。按当前需求，手续费、滑点和资金费率不参与模拟记账。
 
 ## 动态策略标准
 
@@ -172,6 +222,112 @@ PAPER_ADAPTIVE_THRESHOLDS=false
 - 模拟成交：用虚拟账户的净盈亏补充单纯“止盈/止损复盘”的不足。
 
 归因结果会显示在 Dashboard 的“策略归因”面板，也会通过 `/api/performance-attribution` 输出。样本足够时，强项会适度加权，弱项会自动降权，避免一直按固定参数推送。
+
+## Walk-forward 回测
+
+系统不会用单次全历史回测来证明策略有效。每个有足够 K 线的标的会做滚动验证：
+
+- 训练窗口：只用过去 K 线选择 EMA/RSI/ATR 风控参数。
+- 测试窗口：只在之后的 K 线上验证，不把未来数据带回训练。
+- 入场规则：信号在当前 K 线收盘后确认，下一根 K 线开盘入场，降低 look-ahead bias。
+- 输出指标：测试胜率、期望 R、利润因子、最大回撤 R、正收益窗口比例、支持方向。
+- 风险提示：样本不足、训练为正但测试为负、测试回撤偏高、窗口数量太少。
+
+默认配置：
+
+```env
+WALK_FORWARD_ENABLED=true
+WALK_FORWARD_TRAIN_WINDOW=84
+WALK_FORWARD_TEST_WINDOW=24
+WALK_FORWARD_STEP_WINDOW=24
+```
+
+Walk-forward 结果会作为综合分里的独立因子，也会出现在 Telegram 完整策略消息和 Dashboard 的方向单卡片里。注意：当前实现针对正在监控的标的池做验证，不等同于完整历史成分股池回测，所以 survivorship bias 会在结果里作为模型治理风险保留。
+
+## 胜率校准
+
+`winProbability` 不是固定相信模型估算。系统会从信号历史里还原每条已复盘信号当时的预测胜率，并按概率分桶比较真实胜率：
+
+- `60-65` 分桶：系统当时说 60%-65% 的信号，后续真实胜率是多少。
+- `65-70` 分桶：如果真实胜率只有 50%，新信号会被自动下调。
+- 样本不足时不调整，避免小样本噪声误导。
+- 输出 `expectedCalibrationError` 和 `brierScore`，用于后续模型治理和漂移监控。
+
+默认配置：
+
+```env
+PROBABILITY_CALIBRATION_BUCKET_SIZE=5
+PROBABILITY_CALIBRATION_MIN_BUCKET_SAMPLES=4
+PROBABILITY_CALIBRATION_MIN_TOTAL_SAMPLES=6
+```
+
+校准结果会写回每条交易计划：保留 `rawWinProbability`，同时把 `winProbability` 替换成校准后的概率。Telegram 完整消息会显示原始胜率、校准后胜率、分桶样本和真实胜率。
+
+## 衍生品/盘口因子
+
+系统会优先从 Binance USD-M Futures 读取衍生品数据作为信号因子：
+
+- `openInterest`
+- `globalLongShortAccountRatio`
+- `markPrice / indexPrice` 基差
+- order book imbalance
+
+这些数据只用于判断合约拥挤度和盘口方向，不做资金费率扣费：
+
+```env
+DERIVATIVES_DATA_ENABLED=true
+DERIVATIVES_DATA_LIMIT=20
+DERIVATIVES_DATA_CONCURRENCY=4
+```
+
+## 事件风险
+
+事件风险不是简单新闻加减分。高风险事件会把信号降权，严重时把动作改成 `WAIT`：
+
+- FOMC / CPI / 非农 / PCE
+- SEC / ETF / 监管新闻
+- 财报和业绩指引
+- 代币解锁、大额链上转账、安全事件
+- 黑天鹅关键词
+
+也可以用免费配置手动加事件窗口：
+
+```env
+EVENT_RISK_ENABLED=true
+EVENT_RISK_WINDOWS_JSON=[{"name":"FOMC","start":"2026-06-10T17:30:00Z","end":"2026-06-10T19:30:00Z","symbols":["ALL"],"severity":"HIGH","action":"REDUCE"}]
+```
+
+## 模型治理和漂移监控
+
+系统会持续监控模型是否失效：
+
+- 最近 20 / 50 / 100 条复盘胜率。
+- 高置信信号是否真实胜率偏低。
+- 概率校准误差和 Brier 分数。
+- 数据源是否连接异常。
+
+当状态变成 `watch` 或 `degraded` 时，模型大脑分会自动降权，并在 Telegram 完整消息里显示“模型治理”区块。
+
+## 机会扫描推送
+
+系统不是只等固定时间。除了完整定时推送，还会按美股交易时段做低成本机会扫描：
+
+- 市场/大盘信号反转。
+- 新高置信机会。
+- 综合分突然提升。
+- 置信度升级。
+- Walk-forward、胜率校准、衍生品/盘口和交易员检查同时共振。
+
+默认扫描频率和定时信号一致：
+
+- 美股盘中：15 分钟。
+- 临近开盘盘前 07:00-09:30 ET：30 分钟。
+- 普通盘前 04:00-07:00 ET：60 分钟。
+- 盘后：60 分钟。
+- 非交易时段：240 分钟。
+- 周末：240 分钟。
+
+这些触发会走对应 Telegram Topic，避免错过盘中突然出现的高质量策略。
 
 升级或本地验证时如果不想往 Telegram/Lark 发消息，可以临时设置：
 

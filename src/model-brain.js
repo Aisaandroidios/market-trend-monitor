@@ -134,6 +134,10 @@ export function scoreOpenSourceModelBrain(idea, { marketContext = {} } = {}) {
     score = (score * 0.55) + (externalScore * 0.45);
   }
 
+  if (idea.modelGovernance?.status && idea.modelGovernance.status !== "ok") {
+    score *= Number(idea.modelGovernance.score ?? 0.85);
+  }
+
   const roundedScore = round(clamp(score));
   const provider = external?.provider ? `Open Quant Ensemble + ${external.provider}` : "Open Quant Ensemble";
   const externalText = external?.provider ? `；外部模型 ${external.provider} 同步参与` : "";
@@ -147,7 +151,7 @@ export function scoreOpenSourceModelBrain(idea, { marketContext = {} } = {}) {
     biasDirection: idea.direction,
     components: Object.fromEntries(Object.entries(components).map(([key, value]) => [key, round(value)])),
     ...(external ? { external } : {}),
-    note: `开源模型大脑支持 ${idea.symbol} ${idea.direction}，模型分 ${(roundedScore * 100).toFixed(0)}%${externalText}。`
+    note: `开源模型大脑支持 ${idea.symbol} ${idea.direction}，模型分 ${(roundedScore * 100).toFixed(0)}%${externalText}${idea.modelGovernance?.status && idea.modelGovernance.status !== "ok" ? `；模型治理 ${idea.modelGovernance.status} 已降权` : ""}。`
   };
 }
 

@@ -3,12 +3,12 @@ import { decisionIntervalForUsMarketSession } from "./market-session.js";
 import { normalizeTelegramTopicSymbol } from "./notifiers.js";
 
 const defaultOpportunityScanIntervals = {
-  regular: 300000,
-  near_open: 600000,
-  premarket: 900000,
-  after_hours: 1800000,
-  off_hours: 3600000,
-  weekend: 3600000
+  regular: 900000,
+  near_open: 1800000,
+  premarket: 3600000,
+  after_hours: 3600000,
+  off_hours: 14400000,
+  weekend: 14400000
 };
 
 function positiveNumber(value, fallback) {
@@ -78,6 +78,18 @@ function alertReasons({ idea, previous, minFirstScore, scoreJump }) {
   }
   if (confidenceRank(idea.confidence) > confidenceRank(previous?.confidence)) reasons.push("置信度升级");
   if ((idea.modelBrain?.score ?? 0) >= 0.78) reasons.push("模型大脑共振");
+  if (idea.walkForward?.status === "ok" && idea.walkForward.supportDirection === idea.direction && Number(idea.walkForward.validationScore ?? 0) >= 0.58) {
+    reasons.push("Walk-forward 支持当前方向");
+  }
+  if (idea.probabilityCalibration?.status === "ok" && Number(idea.probabilityCalibration.calibratedPercent ?? 0) >= 60) {
+    reasons.push("校准胜率达标");
+  }
+  if (idea.derivatives?.ok && idea.derivatives.biasDirection === idea.direction) {
+    reasons.push("衍生品/盘口同向");
+  }
+  if (idea.eventRisk?.status === "clear" || !idea.eventRisk) {
+    if (score >= minFirstScore && Number(idea.tradePlaybook?.score ?? 0) >= 0.65) reasons.push("优质策略条件共振");
+  }
 
   return reasons;
 }

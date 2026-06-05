@@ -8,6 +8,7 @@ import {
   supportResistance
 } from "./indicators.js";
 import { buildProfessionalTradePlaybook } from "./trade-playbook.js";
+import { runWalkForwardBacktest } from "./walk-forward.js";
 
 let binanceKlineBackoffUntil = Number(process.env.BINANCE_KLINE_BACKOFF_UNTIL ?? 0);
 const hyperliquidCoinBySymbol = new Map(Object.entries({
@@ -629,6 +630,7 @@ export function buildTradeIdea({
   dataSource = candles?.dataSource,
   currentQuote = null,
   futuresStat = null,
+  derivatives = null,
   generatedAt = Date.now()
 }) {
   const quote = currentQuote ?? (dataSource ? {
@@ -725,6 +727,11 @@ export function buildTradeIdea({
     resistance: roundedResistance,
     indicators: roundedIndicators
   });
+  const walkForward = runWalkForwardBacktest({
+    symbol,
+    candles,
+    directionFilter: "BOTH"
+  });
 
   return {
     id: `${market}:${symbol}:${direction}:${generatedAt}`,
@@ -734,6 +741,8 @@ export function buildTradeIdea({
     dataSource,
     currentQuote: quote,
     moneyFlow,
+    derivatives,
+    walkForward,
     tradePlan: {
       ...tradePlan,
       takeProfit: roundedTakeProfit,
