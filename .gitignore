@@ -11,6 +11,7 @@ data/*.jsonl
 data/*.sqlite
 data/*.sqlite-*
 data/*.sqlite.bak-*
+data/quarantine-*/
 data/*.db
 data/*.db-*
 docs/superpowers/
