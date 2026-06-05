@@ -98,7 +98,7 @@ Invoke-RestMethod http://localhost:8787/api/health
 ## 5. Linux 服务器部署
 
 ```bash
-git clone https://github.com/YOUR_NAME/market-trend-monitor.git
+git clone https://github.com/Aisaandroidios/market-trend-monitor.git
 cd market-trend-monitor
 cp .env.example .env.local
 python3.11 -m venv .venv
@@ -146,7 +146,7 @@ gh repo create market-trend-monitor --public --source=. --remote=origin --push
 如果已经有远程仓库：
 
 ```bash
-git remote add origin https://github.com/YOUR_NAME/market-trend-monitor.git
+git remote add origin https://github.com/Aisaandroidios/market-trend-monitor.git
 git branch -M main
 git push -u origin main
 ```

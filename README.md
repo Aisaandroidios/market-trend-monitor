@@ -19,7 +19,7 @@
 ### macOS
 
 ```bash
-git clone https://github.com/YOUR_NAME/market-trend-monitor.git
+git clone https://github.com/Aisaandroidios/market-trend-monitor.git
 cd market-trend-monitor
 chmod +x scripts/install-macos.sh
 ./scripts/install-macos.sh
@@ -36,7 +36,7 @@ launchctl kickstart -k gui/$(id -u)/com.market-trend-monitor
 先安装 Node.js 22+ 和 Python 3.11+，然后：
 
 ```powershell
-git clone https://github.com/YOUR_NAME/market-trend-monitor.git
+git clone https://github.com/Aisaandroidios/market-trend-monitor.git
 cd market-trend-monitor
 powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1
 ```
