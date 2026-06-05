@@ -1,0 +1,18 @@
+{
+  "signals": [
+    {
+      "symbol": "BTCUSDT",
+      "provider": "Qlib-LightGBM",
+      "direction": "LONG",
+      "probability": 0.72,
+      "reason": "model agrees with trend and liquidity features"
+    },
+    {
+      "symbol": "ETHUSDT",
+      "provider": "Qlib-LightGBM",
+      "direction": "SHORT",
+      "probability": 0.68,
+      "reason": "model sees downside momentum and weak regime"
+    }
+  ]
+}

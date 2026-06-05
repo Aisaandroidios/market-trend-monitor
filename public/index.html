@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Market Trend Monitor</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Binance Spot Live</p>
+          <h1>市场趋势监控</h1>
+        </div>
+        <div class="status" data-status="connecting">
+          <span class="status-dot"></span>
+          <span id="connectionStatus">连接中</span>
+        </div>
+      </header>
+
+      <section class="metrics" aria-label="market metrics">
+        <div>
+          <span class="metric-label">加密 USDT</span>
+          <strong id="cryptoCount">0</strong>
+        </div>
+        <div>
+          <span class="metric-label">美股活跃</span>
+          <strong id="stockCount">0</strong>
+        </div>
+        <div>
+          <span class="metric-label">黄金石油</span>
+          <strong id="commodityCount">0</strong>
+        </div>
+        <div>
+          <span class="metric-label">最新信号</span>
+          <strong id="signalCount">0</strong>
+        </div>
+      </section>
+
+      <section class="best-signal" aria-label="best signal">
+        <div class="section-title">
+          <h2>最高置信方向</h2>
+          <span id="bestSignalContext">等待计算</span>
+        </div>
+        <div id="bestSignalCard" class="best-card">
+          <p class="empty-inline">等待多因子模型评分...</p>
+        </div>
+      </section>
+
+      <section class="toolbar" aria-label="filters">
+        <label class="search">
+          <span>搜索</span>
+          <input id="searchInput" type="search" placeholder="BTC, ETH, SOL..." autocomplete="off">
+        </label>
+        <label>
+          <span>排序</span>
+          <select id="sortSelect">
+            <option value="quoteVolume">成交额</option>
+            <option value="changePercent">涨跌幅</option>
+            <option value="symbol">名称</option>
+            <option value="price">价格</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="signals" aria-label="trend signals">
+        <div class="section-title">
+          <h2>趋势信号</h2>
+          <span id="lastUpdate">--</span>
+        </div>
+        <div id="signalList" class="signal-list">
+          <p class="empty-inline">等待信号...</p>
+        </div>
+      </section>
+
+      <section class="trade-ideas" aria-label="trade ideas">
+        <div class="section-title">
+          <h2>方向单建议</h2>
+          <span>1h K线 · 技术指标</span>
+        </div>
+        <div id="tradeIdeaList" class="trade-grid">
+          <p class="empty-inline">等待技术指标计算...</p>
+        </div>
+      </section>
+
+      <section class="active-markets" aria-label="active markets">
+        <div class="section-title">
+          <h2>当前活跃市场</h2>
+          <span>按成交额筛选</span>
+        </div>
+        <div id="activeMarketList" class="active-grid">
+          <p class="empty-inline">等待活跃市场数据...</p>
+        </div>
+      </section>
+
+      <section class="market-section" aria-label="stocks and commodities">
+        <div>
+          <div class="section-title">
+            <h2>美股活跃</h2>
+            <span id="stooqStatus">连接中</span>
+          </div>
+          <div id="stockCards" class="cards"></div>
+        </div>
+        <div>
+          <div class="section-title">
+            <h2>黄金石油</h2>
+            <span>XAUUSD / CL.F</span>
+          </div>
+          <div id="commodityCards" class="cards"></div>
+        </div>
+      </section>
+
+      <section class="table-wrap" aria-label="live prices">
+        <div class="section-title table-title">
+          <h2>加密货币实时价格</h2>
+          <span id="binanceStatus">连接中</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>交易对</th>
+              <th>价格</th>
+              <th>24h</th>
+              <th>高</th>
+              <th>低</th>
+              <th>成交额</th>
+              <th>更新</th>
+            </tr>
+          </thead>
+          <tbody id="tickerRows">
+            <tr>
+              <td colspan="7" class="empty">等待行情数据...</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

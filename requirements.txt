@@ -1,0 +1,16 @@
+numpy
+pandas
+scikit-learn
+lightgbm
+vectorbt
+pyqlib
+finrl
+gymnasium
+stable-baselines3
+torch
+tradingview-screener
+yfinance
+alpaca-trade-api
+exchange-calendars
+stockstats
+wrds

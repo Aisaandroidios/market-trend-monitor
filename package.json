@@ -1,0 +1,16 @@
+{
+  "name": "market-trend-monitor",
+  "version": "0.1.0",
+  "private": false,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "check": "node --check src/server.js && node --check src/notifiers.js && node --check src/python-model-signals.js && node --check src/yahoo-data.js",
+    "telegram:topics": "node scripts/telegram-topics.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -1,0 +1,14 @@
+.env.local
+.env
+.env.*.local
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.pyc
+data/*.jsonl
+docs/superpowers/
+.DS_Store
+.idea/
+*.log
+/tmp/
