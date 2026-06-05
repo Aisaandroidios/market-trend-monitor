@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   formatBestSignalMessage,
+  formatPaperAccountMessage,
   formatPaperDailySummaryMessage,
   formatMarketReversalMessage,
   formatProbabilityCalibrationMessage,
@@ -163,7 +164,9 @@ const samplePaperAccountForDailySummary = {
       stopLoss: 2940,
       riskAmount: 200,
       riskReward: 3,
-      unrealizedPnl: 120
+      unrealizedPnl: 120,
+      unrealizedPnlPercent: 4,
+      notional: 3000
     }
   ],
   recentOpenHistory: [
@@ -176,6 +179,7 @@ const samplePaperAccountForDailySummary = {
       entryPrice: 68000,
       takeProfit: 66000,
       stopLoss: 69000,
+      notional: 6800,
       riskAmount: 100,
       riskReward: 2
     },
@@ -189,6 +193,7 @@ const samplePaperAccountForDailySummary = {
       closeReason: "TAKE_PROFIT",
       entryPrice: 588,
       exitPrice: 570,
+      notional: 5880,
       netPnl: 45,
       returnPercent: 2.1
     },
@@ -202,6 +207,7 @@ const samplePaperAccountForDailySummary = {
       closeReason: "STOP_LOSS",
       entryPrice: 155,
       exitPrice: 150,
+      notional: 3100,
       netPnl: -20,
       returnPercent: -1.2
     }
@@ -393,9 +399,31 @@ test("formats paper daily trading result summaries", () => {
   assert.ok(text.includes("BTCUSDT SHORT"));
   assert.ok(text.includes("当前持仓: 1"));
   assert.ok(text.includes("ETHUSDT LONG"));
+  assert.ok(text.includes("占用本金 $3000 | 占权益 29.64%"));
+  assert.ok(text.includes("浮盈亏 $120 | 盈亏率 4%"));
+  assert.ok(text.includes("占用本金 $6800 | 风险 $100 | RR 2"));
+  assert.ok(text.includes("PnL $45 | 回报 2.1%"));
   assert.ok(text.includes("最近拦截: QQQUSDT LONG | 流动性不足，禁止开仓"));
   assert.ok(text.includes("明日/下一交易日关注"));
   assert.ok(text.includes("单笔风险 2%"));
+});
+
+test("formats paper account positions with used capital and history pnl", () => {
+  const text = formatPaperAccountMessage(samplePaperAccountForDailySummary, {
+    reason: "命令查询"
+  });
+
+  assert.ok(text.includes("📍 当前持仓"));
+  assert.ok(text.includes("ETHUSDT LONG"));
+  assert.ok(text.includes("占用本金 $3000 | 占权益 29.64%"));
+  assert.ok(text.includes("浮盈亏 $120 | 盈亏率 4%"));
+  assert.ok(text.includes("🧾 开仓历史"));
+  assert.ok(text.includes("BTCUSDT SHORT | OPEN"));
+  assert.ok(text.includes("占用本金 $6800 | 风险 $100 | RR 2"));
+  assert.ok(text.includes("BNBUSDT SHORT | CLOSED"));
+  assert.ok(text.includes("PnL $45 | 回报 2.1%"));
+  assert.ok(text.includes("SOLUSDT LONG | CLOSED"));
+  assert.ok(text.includes("PnL $-20 | 回报 -1.2%"));
 });
 
 test("paper daily summary notification routes to the paper account topic", async () => {

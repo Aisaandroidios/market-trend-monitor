@@ -735,6 +735,12 @@ function formatStatsRate(value) {
   return `${Number(value ?? 0).toFixed(2).replace(/\.?0+$/, "")}%`;
 }
 
+function formatOptionalStatsRate(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return formatStatsRate(number);
+}
+
 function formatProbabilityCalibrationBlock(scored) {
   const calibration = scored.probabilityCalibration;
   if (!calibration) return [];
@@ -781,6 +787,39 @@ function formatCurrency(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "--";
   return `$${number.toFixed(2).replace(/\.?0+$/, "")}`;
+}
+
+function finiteNumber(value, fallback = null) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function notionalForPosition(position) {
+  const explicit = finiteNumber(position?.notional);
+  if (explicit !== null) return explicit;
+  const entry = finiteNumber(position?.entryPrice);
+  const quantity = finiteNumber(position?.quantity);
+  if (entry !== null && quantity !== null) return Math.abs(entry * quantity);
+  return null;
+}
+
+function formatUsedCapitalLine(position, paperAccount) {
+  const notional = notionalForPosition(position);
+  const equity = finiteNumber(paperAccount?.equity, finiteNumber(paperAccount?.balance, finiteNumber(paperAccount?.initialBalance, 0)));
+  const equityPercent = notional !== null && equity > 0 ? (notional / equity) * 100 : null;
+  return `占用本金 ${formatCurrency(notional)} | 占权益 ${equityPercent === null ? "--" : formatStatsRate(equityPercent)}`;
+}
+
+function formatCapitalRiskLine(position) {
+  return `占用本金 ${formatCurrency(notionalForPosition(position))} | 风险 ${formatCurrency(position?.riskAmount)} | RR ${position?.riskReward ?? "--"}`;
+}
+
+function formatOpenPnlLine(position) {
+  return `${pnlBadge(position?.unrealizedPnl)} 浮盈亏 ${formatCurrency(position?.unrealizedPnl)} | 盈亏率 ${formatOptionalStatsRate(position?.unrealizedPnlPercent)}`;
+}
+
+function formatClosedPnlLine(entry) {
+  return `${pnlBadge(entry?.netPnl)} PnL ${formatCurrency(entry?.netPnl)} | 回报 ${formatOptionalStatsRate(entry?.returnPercent)}`;
 }
 
 function pnlBadge(value) {
@@ -860,14 +899,20 @@ export function formatPaperAccountMessage(paperAccount, { reason = "账户更新
         ...openPositions.slice(0, 6).flatMap((position) => [
           `${directionEmoji(position.direction)} ${position.symbol} ${position.direction}`,
           `入场 ${position.entryPrice} | 现价 ${position.currentPrice ?? "--"} | TP ${position.takeProfit} | SL ${position.stopLoss}`,
-          `${pnlBadge(position.unrealizedPnl)} 浮盈亏 ${formatCurrency(position.unrealizedPnl)} | 风险 ${formatCurrency(position.riskAmount)} | RR ${position.riskReward}`
+          formatUsedCapitalLine(position, paperAccount),
+          `${formatOpenPnlLine(position)} | 风险 ${formatCurrency(position.riskAmount)} | RR ${position.riskReward}`
         ])
       ];
   const historyLines = history.length
-    ? history.slice(0, 5).flatMap((entry) => [
-        `${entry.status === "OPEN" ? "🟢" : pnlBadge(entry.netPnl)} ${entry.symbol} ${entry.direction} | ${entry.status}`,
-        `入场 ${entry.entryPrice} | TP ${entry.takeProfit} | SL ${entry.stopLoss}${entry.status === "CLOSED" ? ` | PnL ${formatCurrency(entry.netPnl)}` : ""}`
-      ])
+    ? history.slice(0, 5).flatMap((entry) => {
+        const closed = entry.status === "CLOSED";
+        return [
+          `${closed ? pnlBadge(entry.netPnl) : "🟢"} ${entry.symbol} ${entry.direction} | ${entry.status}`,
+          `入场 ${entry.entryPrice} | TP ${entry.takeProfit} | SL ${entry.stopLoss}`,
+          formatCapitalRiskLine(entry),
+          closed ? formatClosedPnlLine(entry) : null
+        ].filter(Boolean);
+      })
     : ["开仓历史: 暂无"];
   const positionRisk = paperAccount.config?.positionRisk ?? {};
   const highQualityCap = positionRisk.highQualityRiskEnabled
@@ -908,22 +953,24 @@ export function formatPaperAccountMessage(paperAccount, { reason = "账户更新
 function formatPaperDailyTradeLine(trade) {
   return [
     `${pnlBadge(trade.netPnl)} ${trade.symbol} ${trade.direction} | ${trade.closeReason ?? trade.status ?? "CLOSED"}`,
-    `PnL ${formatCurrency(trade.netPnl)} | 入 ${trade.entryPrice ?? "--"} -> 出 ${trade.exitPrice ?? "--"} | 回报 ${formatStatsRate(trade.returnPercent)}`
+    `${formatClosedPnlLine(trade)} | 入 ${trade.entryPrice ?? "--"} -> 出 ${trade.exitPrice ?? "--"}`
   ];
 }
 
 function formatPaperDailyOpenLine(entry) {
   return [
     `${directionEmoji(entry.direction)} ${entry.symbol} ${entry.direction}`,
-    `入场 ${entry.entryPrice ?? "--"} | TP ${entry.takeProfit ?? "--"} | SL ${entry.stopLoss ?? "--"} | 风险 ${formatCurrency(entry.riskAmount)} | RR ${entry.riskReward ?? "--"}`
+    `入场 ${entry.entryPrice ?? "--"} | TP ${entry.takeProfit ?? "--"} | SL ${entry.stopLoss ?? "--"}`,
+    formatCapitalRiskLine(entry)
   ];
 }
 
-function formatPaperDailyPositionLine(position) {
+function formatPaperDailyPositionLine(position, paperAccount) {
   return [
     `${directionEmoji(position.direction)} ${position.symbol} ${position.direction}`,
     `现价 ${position.currentPrice ?? "--"} | 入场 ${position.entryPrice ?? "--"} | TP ${position.takeProfit ?? "--"} | SL ${position.stopLoss ?? "--"}`,
-    `${pnlBadge(position.unrealizedPnl)} 浮盈亏 ${formatCurrency(position.unrealizedPnl)} | 风险 ${formatCurrency(position.riskAmount)} | RR ${position.riskReward ?? "--"}`
+    formatUsedCapitalLine(position, paperAccount),
+    `${formatOpenPnlLine(position)} | 风险 ${formatCurrency(position.riskAmount)} | RR ${position.riskReward ?? "--"}`
   ];
 }
 
@@ -979,7 +1026,7 @@ export function formatPaperDailySummaryMessage(paperAccount, {
   const positionLines = openPositions.length
     ? [
         `当前持仓: ${openPositions.length}`,
-        ...openPositions.slice(0, 6).flatMap(formatPaperDailyPositionLine)
+        ...openPositions.slice(0, 6).flatMap((position) => formatPaperDailyPositionLine(position, paperAccount))
       ]
     : ["当前持仓: 无"];
   const riskLines = [
