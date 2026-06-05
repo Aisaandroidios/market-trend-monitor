@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import "./env.js";
 import {
+  applyModelSignalToTradePlan,
   buildTradeIdea,
   fetchBinanceCandlesConcurrent,
   fetchBinanceFutures24hStats,
@@ -682,10 +683,10 @@ export function createHttpServer({
       const idea = tradeIdeas.get(normalizedSymbol);
       if (!idea) continue;
 
-      tradeIdeas.set(normalizedSymbol, {
+      tradeIdeas.set(normalizedSymbol, applyModelSignalToTradePlan({
         ...idea,
         modelSignal
-      });
+      }, modelSignal));
     }
 
     updateBestSignal();

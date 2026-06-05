@@ -116,6 +116,225 @@ function finiteNumber(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function boundedDistance(value, fallback) {
+  const number = Math.abs(Number(value));
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+function directionRoom({ direction, price, support, resistance, fallback }) {
+  if (direction === "LONG") return boundedDistance(resistance - price, fallback);
+  if (direction === "SHORT") return boundedDistance(price - support, fallback);
+  return fallback;
+}
+
+function directionalLevel({ direction, price, support, resistance, atr }) {
+  if (direction === "LONG" && Number.isFinite(resistance) && resistance > price) return resistance;
+  if (direction === "SHORT" && Number.isFinite(support) && support < price) return support;
+  return direction === "LONG" ? price + (atr * 2) : price - (atr * 2);
+}
+
+function scoreEdge({ score, volumeRatio, newsScore, moneyFlow }) {
+  const technicalEdge = clamp(score / 5, 0, 1);
+  const volumeEdge = clamp((volumeRatio - 0.75) / 1.25, 0, 1);
+  const newsEdge = clamp(Math.abs(newsScore) / 0.75, 0, 1);
+  const flowEdge = moneyFlow?.alignment === "aligned" ? 1 : moneyFlow?.alignment === "against" ? 0.15 : 0.5;
+
+  return clamp(
+    (technicalEdge * 0.46)
+    + (volumeEdge * 0.18)
+    + (flowEdge * 0.22)
+    + (newsEdge * 0.14),
+    0,
+    1
+  );
+}
+
+function adaptiveRiskReward({
+  direction,
+  score,
+  rsi,
+  volumeRatio,
+  newsScore,
+  moneyFlow,
+  price,
+  atr,
+  support,
+  resistance,
+  stopDistance
+}) {
+  if (!["LONG", "SHORT"].includes(direction) || stopDistance <= 0) return 0;
+
+  const edge = scoreEdge({ score, volumeRatio, newsScore, moneyFlow });
+  const room = directionRoom({
+    direction,
+    price,
+    support,
+    resistance,
+    fallback: stopDistance * 1.4
+  });
+  const roomRatio = room / stopDistance;
+  const momentumPenalty = direction === "LONG" && rsi > 70
+    ? 0.28
+    : direction === "SHORT" && rsi < 28
+      ? 0.28
+      : 0;
+  const liquidityPenalty = volumeRatio < 0.75 ? 0.2 : 0;
+  const flowPenalty = moneyFlow?.alignment === "against" ? 0.35 : 0;
+  const roomCap = clamp((room - (atr * 0.15)) / stopDistance, 0.75, 3.6);
+  const breakoutExtension = edge >= 0.72 && volumeRatio >= 1.15 && moneyFlow?.alignment !== "against"
+    ? clamp((edge - 0.7) * 1.2, 0, 0.4)
+    : 0;
+  const desired = 1.05
+    + (edge * 1.35)
+    + (volumeRatio >= 1.25 ? 0.18 : 0)
+    + (Math.abs(newsScore) >= 0.25 ? 0.15 : 0)
+    - momentumPenalty
+    - liquidityPenalty
+    - flowPenalty;
+
+  return Number(clamp(desired, 0.85, Math.max(0.85, roomCap + breakoutExtension)).toFixed(2));
+}
+
+function structuralStopDistance({ direction, price, atr, support, resistance }) {
+  const atrStop = Math.max(atr * 1.45, price * 0.008);
+  const minStop = price * 0.006;
+  const maxUsefulStructureStop = atrStop * 2.2;
+
+  if (direction === "LONG" && Number.isFinite(support) && support > 0 && support < price) {
+    const structureDistance = (price - support) + (atr * 0.18);
+    if (structureDistance >= minStop && structureDistance <= maxUsefulStructureStop) {
+      return structureDistance;
+    }
+    return atrStop;
+  }
+
+  if (direction === "SHORT" && Number.isFinite(resistance) && resistance > price) {
+    const structureDistance = (resistance - price) + (atr * 0.18);
+    if (structureDistance >= minStop && structureDistance <= maxUsefulStructureStop) {
+      return structureDistance;
+    }
+    return atrStop;
+  }
+
+  return atrStop;
+}
+
+function buildAdaptiveTradePlan({
+  direction,
+  price,
+  atr,
+  support,
+  resistance,
+  score,
+  rsi,
+  volumeRatio,
+  newsScore,
+  moneyFlow
+}) {
+  if (!["LONG", "SHORT"].includes(direction)) {
+    return {
+      takeProfit: price,
+      stopLoss: price,
+      riskReward: 0,
+      summary: "方向未确认，交易计划保持观望。"
+    };
+  }
+
+  const stopDistance = structuralStopDistance({ direction, price, atr, support, resistance });
+  const riskReward = adaptiveRiskReward({
+    direction,
+    score,
+    rsi,
+    volumeRatio,
+    newsScore,
+    moneyFlow,
+    price,
+    atr,
+    support,
+    resistance,
+    stopDistance
+  });
+  const targetDistance = Math.max(stopDistance * riskReward, atr * 0.6);
+  const stopLoss = direction === "LONG" ? price - stopDistance : price + stopDistance;
+  const rawTakeProfit = direction === "LONG" ? price + targetDistance : price - targetDistance;
+  const level = directionalLevel({ direction, price, support, resistance, atr });
+  const room = Math.abs(level - price);
+  const levelText = direction === "LONG" ? "压力位" : "支撑位";
+
+  return {
+    takeProfit: rawTakeProfit,
+    stopLoss,
+    riskReward,
+    summary: `动态RR ${riskReward}，按 ATR/结构位止损，止盈参考${levelText}空间 ${roundPrice(room)}。`
+  };
+}
+
+export function applyModelSignalToTradePlan(idea, modelSignal) {
+  if (!idea || !modelSignal || !["LONG", "SHORT"].includes(idea.direction)) return idea;
+
+  const entry = Number(idea.entry);
+  const stopLoss = Number(idea.stopLoss);
+  const takeProfit = Number(idea.takeProfit);
+  const stopDistance = Math.abs(entry - stopLoss);
+  const targetDistance = Math.abs(takeProfit - entry);
+  if (!entry || !stopDistance || !targetDistance) return idea;
+
+  const modelDirection = String(modelSignal.direction ?? "").toUpperCase();
+  const probability = clamp(Number(modelSignal.probability ?? modelSignal.score ?? 0.5), 0, 1);
+  const alignedProbability = modelDirection === idea.direction ? probability : 1 - probability;
+  const atr = Number(idea.indicators?.atr ?? 0);
+  const support = Number(idea.support);
+  const resistance = Number(idea.resistance);
+  const structuralRoom = directionRoom({
+    direction: idea.direction,
+    price: entry,
+    support,
+    resistance,
+    fallback: targetDistance
+  });
+  const modelScale = alignedProbability >= 0.76
+    ? 1.22
+    : alignedProbability >= 0.68
+      ? 1.12
+      : alignedProbability <= 0.54
+        ? 0.82
+        : 1;
+  const capDistance = Math.max(
+    stopDistance * 0.8,
+    structuralRoom + (alignedProbability >= 0.72 ? atr * 0.35 : 0)
+  );
+  const adjustedTargetDistance = clamp(targetDistance * modelScale, stopDistance * 0.75, Math.max(stopDistance * 0.75, capDistance));
+  const adjustedTakeProfit = idea.direction === "LONG"
+    ? roundPrice(entry + adjustedTargetDistance)
+    : roundPrice(entry - adjustedTargetDistance);
+  const adjustedRiskReward = Number((adjustedTargetDistance / stopDistance).toFixed(2));
+  const adjustedTradePlaybook = buildProfessionalTradePlaybook({
+    symbol: idea.symbol,
+    direction: idea.direction,
+    price: idea.entry,
+    takeProfit: adjustedTakeProfit,
+    stopLoss: idea.stopLoss,
+    support: idea.support,
+    resistance: idea.resistance,
+    indicators: idea.indicators
+  });
+
+  return {
+    ...idea,
+    action: adjustedRiskReward < 1.15 ? "WAIT" : idea.action,
+    takeProfit: adjustedTakeProfit,
+    riskReward: adjustedRiskReward,
+    tradePlaybook: adjustedTradePlaybook ?? idea.tradePlaybook,
+    tradePlan: {
+      ...(idea.tradePlan ?? {}),
+      modelAdjusted: true,
+      modelProvider: modelSignal.provider ?? "model",
+      modelProbability: Number(alignedProbability.toFixed(3)),
+      summary: `${idea.tradePlan?.summary ?? "动态交易计划"} 模型共振概率 ${(alignedProbability * 100).toFixed(0)}%，RR 调整为 ${adjustedRiskReward}。`
+    }
+  };
+}
+
 function parseBinanceBanUntil(message) {
   const match = String(message).match(/banned until (\d+)/i);
   return match ? Number(match[1]) : 0;
@@ -449,7 +668,7 @@ export function buildTradeIdea({
   const shortScore = scoreShort({ price, ema20, ema60, rsi, macdValue, volumeRatio, newsScore, moneyFlow: directionalMoneyFlow });
   const direction = longScore > shortScore ? "LONG" : shortScore > longScore ? "SHORT" : "NEUTRAL";
   const score = Math.max(longScore, shortScore);
-  const action = direction === "LONG" ? "BUY" : direction === "SHORT" ? "SELL" : "WAIT";
+  let action = direction === "LONG" ? "BUY" : direction === "SHORT" ? "SELL" : "WAIT";
   const moneyFlow = {
     ...directionalMoneyFlow,
     alignment: direction !== "NEUTRAL" && directionalMoneyFlow.biasDirection !== "NEUTRAL"
@@ -458,19 +677,22 @@ export function buildTradeIdea({
     detail: buildMoneyFlowInsight({ candles, futuresStat, volumeRatio, direction }).detail
   };
 
-  const stopDistance = Math.max(atr * 1.5, price * 0.01);
-  const targetDistance = stopDistance * 2;
-  const stopLoss = direction === "LONG"
-    ? price - stopDistance
-    : direction === "SHORT"
-      ? price + stopDistance
-      : price;
-  const takeProfit = direction === "LONG"
-    ? price + targetDistance
-    : direction === "SHORT"
-      ? price - targetDistance
-      : price;
-  const riskReward = stopDistance === 0 ? 0 : targetDistance / stopDistance;
+  const tradePlan = buildAdaptiveTradePlan({
+    direction,
+    price,
+    atr,
+    support: levels.support,
+    resistance: levels.resistance,
+    score,
+    rsi,
+    volumeRatio,
+    newsScore,
+    moneyFlow
+  });
+  const stopLoss = tradePlan.stopLoss;
+  const takeProfit = tradePlan.takeProfit;
+  const riskReward = tradePlan.riskReward;
+  if (riskReward < 1.15) action = "WAIT";
   const winProbability = direction === "NEUTRAL"
     ? 0.5
     : clamp(0.45 + (score * 0.045) + (Math.abs(newsScore) * 0.05), 0.45, 0.78);
@@ -512,6 +734,11 @@ export function buildTradeIdea({
     dataSource,
     currentQuote: quote,
     moneyFlow,
+    tradePlan: {
+      ...tradePlan,
+      takeProfit: roundedTakeProfit,
+      stopLoss: roundedStopLoss
+    },
     tradePlaybook,
     action,
     direction,

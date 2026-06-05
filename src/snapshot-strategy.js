@@ -6,6 +6,10 @@ function roundPrice(value) {
   return Number(number.toFixed(8));
 }
 
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
 function syntheticAtr(ticker) {
   const price = Number(ticker.price ?? 0);
   const high = Number(ticker.high ?? 0);
@@ -26,6 +30,19 @@ function supportResistance(ticker, atr) {
     support: roundPrice(low > 0 ? Math.min(low, price - atr) : price - atr),
     resistance: roundPrice(high > 0 ? Math.max(high, price + atr) : price + atr)
   };
+}
+
+function snapshotRiskReward({ direction, price, atr, support, resistance, changePercent, quoteVolume }) {
+  if (!["LONG", "SHORT"].includes(direction)) return 0;
+
+  const directionalRoom = direction === "LONG" ? resistance - price : price - support;
+  const roomRatio = atr > 0 ? directionalRoom / atr : 1;
+  const momentum = clamp(Math.abs(changePercent) / 3, 0, 1);
+  const liquidity = quoteVolume > 50_000_000 ? 0.22 : quoteVolume > 5_000_000 ? 0.12 : 0;
+  const roomCap = clamp(roomRatio - 0.15, 0.8, 2.4);
+  const desired = 1.05 + (momentum * 0.45) + liquidity;
+
+  return Number(clamp(desired, 0.85, Math.max(0.85, roomCap)).toFixed(2));
 }
 
 function directionFromTicker(ticker) {
@@ -67,19 +84,30 @@ export function buildSnapshotTradeIdea({
   const price = Number(ticker.price);
   const atr = syntheticAtr(ticker);
   const { support, resistance } = supportResistance(ticker, atr);
-  const action = direction === "LONG" ? "BUY" : direction === "SHORT" ? "SELL" : "WAIT";
+  let action = direction === "LONG" ? "BUY" : direction === "SHORT" ? "SELL" : "WAIT";
+  const changePercent = Number(ticker.changePercent ?? 0);
+  const quoteVolume = Number(ticker.quoteVolume ?? 0);
+  const riskReward = snapshotRiskReward({
+    direction,
+    price,
+    atr,
+    support,
+    resistance,
+    changePercent,
+    quoteVolume
+  });
   const takeProfit = direction === "LONG"
-    ? roundPrice(price + (atr * 1.8))
+    ? roundPrice(price + (atr * riskReward))
     : direction === "SHORT"
-      ? roundPrice(price - (atr * 1.8))
+      ? roundPrice(price - (atr * riskReward))
       : roundPrice(price);
   const stopLoss = direction === "LONG"
     ? roundPrice(price - atr)
     : direction === "SHORT"
       ? roundPrice(price + atr)
       : roundPrice(price);
-  const changePercent = Number(ticker.changePercent ?? 0);
-  const volumeRatio = Number(ticker.quoteVolume ?? 0) > 0 ? 1.05 : 0.85;
+  if (riskReward < 1.15) action = "WAIT";
+  const volumeRatio = quoteVolume > 0 ? 1.05 : 0.85;
   const moneyFlowDirection = direction === "LONG" ? "LONG" : direction === "SHORT" ? "SHORT" : "NEUTRAL";
 
   return {
@@ -90,7 +118,7 @@ export function buildSnapshotTradeIdea({
     entry: roundPrice(price),
     takeProfit,
     stopLoss,
-    riskReward: direction === "NEUTRAL" ? 0 : 1.8,
+    riskReward,
     winProbability: direction === "NEUTRAL" ? 0.5 : Math.min(0.63, 0.54 + (Math.min(Math.abs(changePercent), 3) * 0.03)),
     support,
     resistance,
@@ -142,6 +170,10 @@ export function buildSnapshotTradeIdea({
         { name: "数据完整度", status: "WARN", note: "使用报价快照，不是完整1h K线" }
       ],
       risks: ["快照策略缺少完整K线结构，仓位必须更轻。"]
+    },
+    tradePlan: {
+      modelAdjusted: false,
+      summary: `快照动态RR ${riskReward}，按日内波动、成交额和支撑压力空间保守估算。`
     },
     generatedAt: new Date(generatedAt).toISOString(),
     reason: `snapshot ${ticker.provider ?? "quote"} change ${changePercent.toFixed(2)}%; active fallback data`

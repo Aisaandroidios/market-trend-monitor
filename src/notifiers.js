@@ -314,6 +314,10 @@ function risksForMessage(scored) {
 }
 
 function executionCondition(scored) {
+  if (scored.action === "WAIT") {
+    return "方向有倾向但当前风险收益比或执行质量未达标，等待回踩/反抽到更好入场位后再触发。";
+  }
+
   if (scored.direction === "SHORT") {
     return `价格接近入场且未放量站回 ${scored.stopLoss} 上方；若站回止损位，SHORT 信号失效。`;
   }
@@ -680,6 +684,7 @@ export function formatTradeIdeaMessage(idea, { marketContext = {} } = {}) {
     `入场: ${scored.entry}`,
     `止盈: ${scored.takeProfit}`,
     `止损: ${scored.stopLoss}`,
+    scored.tradePlan?.summary ? `计划依据: ${scored.tradePlan.summary}` : null,
     "",
     "📊 概率/位置",
     `胜率估算: ${formatPercent(scored.winProbability ?? 0)}`,
@@ -716,7 +721,7 @@ export function formatTradeIdeaMessage(idea, { marketContext = {} } = {}) {
     "",
     "⚠️ 主要风险",
     ...bulletList(risks.slice(0, 5))
-  ].join("\n");
+  ].filter((line) => line !== null).join("\n");
 }
 
 export function formatBestSignalMessage(signal) {
