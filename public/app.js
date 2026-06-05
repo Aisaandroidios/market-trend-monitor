@@ -1,3 +1,10 @@
+import {
+  formatPaperMoney,
+  paperCapitalMetrics,
+  paperClosedPnlMetrics,
+  paperOpenPnlMetrics
+} from "./paper-format.js";
+
 const rowsElement = document.querySelector("#tickerRows");
 const searchInput = document.querySelector("#searchInput");
 const sortSelect = document.querySelector("#sortSelect");
@@ -274,6 +281,8 @@ function renderPaperAccount() {
     ? `<p class="paper-empty">当前无模拟持仓</p>`
     : openPositions.slice(0, 4).map((position) => {
         const directionClass = position.direction === "LONG" ? "positive" : "negative";
+        const capital = paperCapitalMetrics(position, paperAccount);
+        const openPnl = paperOpenPnlMetrics(position);
         return `
           <article class="paper-position">
             <div>
@@ -282,9 +291,12 @@ function renderPaperAccount() {
             </div>
             <dl>
               <div><dt>入场</dt><dd>${position.entryPrice}</dd></div>
-              <div><dt>风险</dt><dd>${formatMoney(position.riskAmount)}</dd></div>
               <div><dt>现价</dt><dd>${position.currentPrice}</dd></div>
-              <div><dt>浮盈亏</dt><dd class="${(position.unrealizedPnl ?? 0) >= 0 ? "positive" : "negative"}">${formatMoney(position.unrealizedPnl)}</dd></div>
+              <div><dt>占用本金</dt><dd>${capital.notionalText}</dd></div>
+              <div><dt>占权益</dt><dd>${capital.equityPercentText}</dd></div>
+              <div><dt>浮盈亏</dt><dd class="${openPnl.tone}">${openPnl.pnlText}</dd></div>
+              <div><dt>盈亏率</dt><dd class="${openPnl.tone}">${openPnl.percentText}</dd></div>
+              <div><dt>风险</dt><dd>${formatPaperMoney(position.riskAmount)}</dd></div>
               <div><dt>RR</dt><dd>${position.riskReward}</dd></div>
             </dl>
           </article>
@@ -294,11 +306,14 @@ function renderPaperAccount() {
     ? `<p class="paper-empty">暂无开仓历史</p>`
     : openHistory.slice(0, 8).map((entry) => {
         const directionClass = entry.direction === "LONG" ? "positive" : "negative";
-        const statusClass = entry.status === "OPEN" ? "positive" : (entry.netPnl ?? 0) >= 0 ? "positive" : "negative";
+        const closed = entry.status === "CLOSED";
+        const closedPnl = paperClosedPnlMetrics(entry);
+        const capital = paperCapitalMetrics(entry, paperAccount);
+        const statusClass = entry.status === "OPEN" ? "positive" : closedPnl.tone;
         const openedAt = entry.openedAt ? new Date(entry.openedAt).toLocaleString() : "--";
-        const result = entry.status === "CLOSED"
-          ? `${entry.closeReason ?? "CLOSED"} · ${formatMoney(entry.netPnl)}`
-          : `持仓中 · 风险 ${formatMoney(entry.riskAmount)}`;
+        const result = closed
+          ? `${entry.closeReason ?? "CLOSED"} · ${closedPnl.pnlText} · ${closedPnl.percentText}`
+          : `持仓中 · 占用 ${capital.notionalText}`;
 
         return `
           <article class="paper-history-row">
@@ -314,6 +329,11 @@ function renderPaperAccount() {
               <div><dt>入场</dt><dd>${entry.entryPrice}</dd></div>
               <div><dt>止盈</dt><dd>${entry.takeProfit}</dd></div>
               <div><dt>止损</dt><dd>${entry.stopLoss}</dd></div>
+              <div><dt>占用</dt><dd>${capital.notionalText}</dd></div>
+              <div><dt>风险</dt><dd>${formatPaperMoney(entry.riskAmount)}</dd></div>
+              <div><dt>RR</dt><dd>${entry.riskReward ?? "--"}</dd></div>
+              <div><dt>PnL</dt><dd class="${closedPnl.tone}">${closed ? closedPnl.pnlText : "--"}</dd></div>
+              <div><dt>回报</dt><dd class="${closedPnl.tone}">${closed ? closedPnl.percentText : "--"}</dd></div>
               <div><dt>分数</dt><dd>${entry.convictionScore ?? "--"}</dd></div>
             </dl>
           </article>
