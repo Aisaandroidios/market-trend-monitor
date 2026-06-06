@@ -46,6 +46,13 @@ function highEdgeIdea() {
     },
     dataSource: {
       provider: "Binance USD-M Futures"
+    },
+    currentQuote: {
+      exchange: "Binance",
+      source: "Binance USD-M Futures last",
+      symbol: "ETHUSDT",
+      price: 3000,
+      realtime: true
     }
   };
 }

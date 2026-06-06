@@ -11,7 +11,18 @@ test("plans complete topic pushes for actionable, neutral, and missing strategy 
       MCDUSDT: 33
     },
     tradeIdeas: new Map([
-      ["BTCUSDT", { symbol: "BTCUSDT", direction: "SHORT", action: "SELL" }],
+      ["BTCUSDT", {
+        symbol: "BTCUSDT",
+        direction: "SHORT",
+        action: "SELL",
+        currentQuote: {
+          exchange: "Binance",
+          source: "Binance USD-M Futures last",
+          symbol: "BTCUSDT",
+          price: 65000,
+          realtime: true
+        }
+      }],
       ["IBMUSDT", { symbol: "IBMUSDT", direction: "NEUTRAL", action: "WAIT" }]
     ]),
     tickers: [
@@ -35,8 +46,30 @@ test("complete topic push plan skips symbols already sent by change notification
       ETHUSDT: 22
     },
     tradeIdeas: new Map([
-      ["BTCUSDT", { symbol: "BTCUSDT", direction: "LONG", action: "BUY" }],
-      ["ETHUSDT", { symbol: "ETHUSDT", direction: "SHORT", action: "SELL" }]
+      ["BTCUSDT", {
+        symbol: "BTCUSDT",
+        direction: "LONG",
+        action: "BUY",
+        currentQuote: {
+          exchange: "Binance",
+          source: "Binance USD-M Futures last",
+          symbol: "BTCUSDT",
+          price: 65000,
+          realtime: true
+        }
+      }],
+      ["ETHUSDT", {
+        symbol: "ETHUSDT",
+        direction: "SHORT",
+        action: "SELL",
+        currentQuote: {
+          exchange: "Binance",
+          source: "Binance USD-M Futures last",
+          symbol: "ETHUSDT",
+          price: 1800,
+          realtime: true
+        }
+      }]
     ]),
     skipSymbols: new Set(["BTCUSDT"])
   });

@@ -141,6 +141,7 @@ function isExecutableCandidate(idea, config, strategyPolicy = null) {
   if (!idea || !["LONG", "SHORT"].includes(idea.direction)) return false;
   if (![actionForDirection(idea.direction), "BUY", "SELL"].includes(idea.action)) return false;
   if (!plannedLevels(idea)) return false;
+  if (idea.currentQuote?.realtime !== true || finiteNumber(idea.currentQuote?.price, 0) <= 0) return false;
   if (config.requireDataSource && !idea.dataSource && !idea.currentQuote?.source) return false;
 
   const thresholds = effectiveThresholds(config, strategyPolicy);

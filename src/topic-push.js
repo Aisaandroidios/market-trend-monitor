@@ -1,4 +1,4 @@
-import { normalizeTelegramTopicSymbol } from "./notifiers.js";
+import { hasRealtimeQuote, normalizeTelegramTopicSymbol } from "./notifiers.js";
 import { tickerForTopicStatus } from "./topic-status.js";
 
 function ideaForSymbol(tradeIdeas, symbol) {
@@ -7,7 +7,7 @@ function ideaForSymbol(tradeIdeas, symbol) {
 }
 
 function isActionableIdea(idea) {
-  return ["LONG", "SHORT"].includes(idea?.direction) && idea?.action !== "WAIT";
+  return ["LONG", "SHORT"].includes(idea?.direction) && idea?.action !== "WAIT" && hasRealtimeQuote(idea);
 }
 
 export function completeTopicPushPlan({

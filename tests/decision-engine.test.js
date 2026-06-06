@@ -26,13 +26,13 @@ test("parses Binance kline arrays into candles", () => {
 
 test("parses Binance futures 24h ticker stats", () => {
   const stats = parseBinanceFutures24hTickers([
-    { symbol: "BTCUSDT", quoteVolume: "1000000", volume: "10", priceChangePercent: "-2.5" },
-    { symbol: "MRVLUSDT", quoteVolume: "900000", volume: "3000", priceChangePercent: "4.2" }
+    { symbol: "BTCUSDT", quoteVolume: "1000000", volume: "10", lastPrice: "61800.5", priceChangePercent: "-2.5" },
+    { symbol: "MRVLUSDT", quoteVolume: "900000", volume: "3000", lastPrice: "312.75", priceChangePercent: "4.2" }
   ]);
 
   assert.deepEqual(stats, [
-    { symbol: "BTCUSDT", quoteVolume: 1000000, volume: 10, priceChangePercent: -2.5 },
-    { symbol: "MRVLUSDT", quoteVolume: 900000, volume: 3000, priceChangePercent: 4.2 }
+    { symbol: "BTCUSDT", quoteVolume: 1000000, volume: 10, lastPrice: 61800.5, priceChangePercent: -2.5 },
+    { symbol: "MRVLUSDT", quoteVolume: 900000, volume: 3000, lastPrice: 312.75, priceChangePercent: 4.2 }
   ]);
 });
 
@@ -136,12 +136,7 @@ test("builds a long trade idea and waits when reward does not justify entry", ()
     quoteSymbol: "BTCUSDT",
     interval: "1h"
   });
-  assert.deepEqual(idea.currentQuote, {
-    exchange: "Binance",
-    source: "Binance USD-M Futures",
-    symbol: "BTCUSDT",
-    price: 179
-  });
+  assert.equal(idea.currentQuote, null);
 });
 
 test("estimates money flow from candles and 24h futures stats", () => {

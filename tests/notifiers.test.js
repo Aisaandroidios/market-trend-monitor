@@ -778,7 +778,8 @@ test("formats trade idea messages with full professional context", () => {
         exchange: "Binance",
         source: "Binance USD-M Futures",
         symbol: "ETHUSDT",
-        price: 1767.88
+        price: 1767.88,
+        realtime: true
       },
       moneyFlow: {
         status: "outflow",
@@ -905,8 +906,9 @@ test("formats trade idea messages with full professional context", () => {
   assert.equal(nextNonEmptyAfterPlan, "📊 概率/位置");
   assert.ok(text.includes("📡 数据/报价"));
   assert.ok(text.includes("参考数据: Binance USD-M Futures 1h K线"));
-  assert.ok(text.includes("报价交易所: Binance"));
-  assert.ok(text.includes("交易所报价: 1767.88 (ETHUSDT)"));
+  assert.ok(text.includes("实时报价源: Binance USD-M Futures"));
+  assert.ok(text.includes("交易所: Binance"));
+  assert.ok(text.includes("实时价格: 1767.88 (ETHUSDT)"));
   assert.ok(text.includes("💸 资金流向"));
   assert.ok(text.includes("方向: 偏流出 | 支持: SHORT"));
   assert.ok(text.includes("近12根净流: -7.42% | 成交倍率: 1.22"));
@@ -1005,6 +1007,13 @@ test("signal notification uses full trade idea when available", async () => {
         source: "Alpha Vantage",
         status: "neutral",
         detail: "新闻源已配置，本轮没有明显方向性情绪。"
+      },
+      currentQuote: {
+        exchange: "Binance",
+        source: "Binance USD-M Futures last",
+        symbol: "BTCUSDT",
+        price: 62314,
+        realtime: true
       },
       reason: "EMA20 below EMA60"
     },
@@ -1238,6 +1247,13 @@ test("complete topic notification sends full trade idea messages for actionable 
         atr: 900,
         volumeRatio: 1.2,
         newsScore: -0.1
+      },
+      currentQuote: {
+        exchange: "Binance",
+        source: "Binance USD-M Futures last",
+        symbol: "BTCUSDT",
+        price: 65000,
+        realtime: true
       },
       reason: "EMA20 below EMA60; RSI 43; MACD histogram -10"
     },

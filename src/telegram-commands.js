@@ -88,6 +88,7 @@ function formatSourceReply(symbol, snapshot) {
   const hyperliquidSymbol = metadata?.hyperliquidSymbol ?? (binanceSymbol ? hyperliquidCoinForDecisionSymbol(binanceSymbol) : null);
   const dataSource = idea?.dataSource;
   const quote = idea?.currentQuote;
+  const realtimeQuote = quote?.realtime ? quote : null;
 
   const lines = [
     "Topic 数据源",
@@ -108,9 +109,10 @@ function formatSourceReply(symbol, snapshot) {
   if (dataSource) {
     lines.push(
       `当前使用: ${dataSource.provider ?? dataSource.exchange ?? "未知"}`,
-      `当前合约: ${dataSource.quoteSymbol ?? quote?.symbol ?? binanceSymbol ?? symbol}`,
+      `当前合约: ${dataSource.quoteSymbol ?? realtimeQuote?.symbol ?? binanceSymbol ?? symbol}`,
       `K线周期: ${dataSource.interval ?? "未知"}`,
-      `交易所报价: ${quote?.price ?? idea.entry ?? "--"}`
+      `实时报价源: ${realtimeQuote?.source ?? realtimeQuote?.exchange ?? "无实时价"}`,
+      `交易所实时价: ${realtimeQuote?.price ?? "无实时价"}`
     );
   } else {
     lines.push(

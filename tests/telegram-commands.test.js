@@ -109,8 +109,10 @@ test("builds a source reply for the matching topic", () => {
           },
           currentQuote: {
             exchange: "Binance",
+            source: "Binance USD-M Futures last",
             symbol: "IBMUSDT",
-            price: 300.47
+            price: 300.47,
+            realtime: true
           }
         }
       ]
@@ -125,6 +127,8 @@ test("builds a source reply for the matching topic", () => {
   assert.ok(reply.includes("Binance现货: IBMUSDT | 未上现货"));
   assert.ok(reply.includes("当前使用: Binance USD-M Futures"));
   assert.ok(reply.includes("当前合约: IBMUSDT"));
+  assert.ok(reply.includes("实时报价源: Binance"));
+  assert.ok(reply.includes("交易所实时价: 300.47"));
   assert.ok(reply.includes("Hyperliquid候选: xyz:IBM | 已连上"));
 });
 

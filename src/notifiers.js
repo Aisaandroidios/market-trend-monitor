@@ -469,19 +469,23 @@ function formatLongTermRegimeBlock(scored) {
 
 function formatDataQuoteBlock(scored) {
   const dataSource = scored.dataSource ?? {};
-  const quote = scored.currentQuote ?? {};
-  const provider = dataSource.provider ?? quote.source ?? "未记录";
+  const quote = scored.currentQuote?.realtime ? scored.currentQuote : {};
+  const provider = dataSource.provider ?? "未记录";
+  const quoteSource = quote.source ?? quote.exchange ?? "无实时价";
   const interval = dataSource.interval ? `${dataSource.interval} K线` : "K线";
   const exchange = quote.exchange ?? dataSource.exchange ?? "未记录";
   const quoteSymbol = quote.symbol ?? dataSource.quoteSymbol ?? scored.sourceSymbol ?? scored.symbol;
-  const quotePrice = quote.price ?? scored.entry ?? "--";
+  const quotePrice = quote.price ?? "--";
+  const quoteTime = quote.updatedAt ? formatBeijingTimestamp(new Date(quote.updatedAt).getTime()) : null;
 
   return [
     "📡 数据/报价",
     `参考数据: ${provider}${provider === "未记录" ? "" : ` ${interval}`}`,
-    `报价交易所: ${exchange}`,
-    `交易所报价: ${quotePrice} (${quoteSymbol})`
-  ];
+    `实时报价源: ${quoteSource}`,
+    `交易所: ${exchange}`,
+    `实时价格: ${quotePrice} (${quoteSymbol})`,
+    quoteTime ? `报价时间: ${quoteTime} 北京时间` : null
+  ].filter(Boolean);
 }
 
 function topicTickerQuote(ticker) {
@@ -1260,6 +1264,10 @@ function joinMessageLines(lines) {
   return compacted.join("\n");
 }
 
+export function hasRealtimeQuote(idea) {
+  return idea?.currentQuote?.realtime === true && finiteNumber(idea.currentQuote.price) !== null;
+}
+
 export function formatTradeIdeaMessage(idea, { marketContext = {}, paperAccount = null } = {}) {
   const scored = scoreForMessage(idea, { marketContext });
   const summary = scored.summary
@@ -1380,7 +1388,7 @@ export async function sendSignalNotifications({
   telegram: telegramConfig = {},
   fetchImpl = globalThis.fetch
 }) {
-  const text = tradeIdea
+  const text = tradeIdea && hasRealtimeQuote(tradeIdea)
     ? formatTradeIdeaMessage(tradeIdea, { marketContext: tradeIdea.marketContext })
     : formatSignalMessage(signal);
   const [telegram, lark] = await Promise.all([
@@ -1448,6 +1456,13 @@ export async function sendTradeIdeaNotifications({
   paperAccount,
   fetchImpl = globalThis.fetch
 }) {
+  if (!hasRealtimeQuote(idea)) {
+    return {
+      telegram: { ok: false, skipped: true, reason: "missing_realtime_quote" },
+      lark: { ok: false, skipped: true, reason: "missing_realtime_quote" }
+    };
+  }
+
   const text = formatTradeIdeaMessage(idea, { marketContext: idea.marketContext, paperAccount });
   const [telegram, lark] = await Promise.all([
     sendTelegramSymbolMessage({ symbol: idea.symbol, text, fetchImpl }),
@@ -1592,7 +1607,7 @@ export async function sendCompleteTopicNotification({
   telegram: telegramConfig = {},
   fetchImpl = globalThis.fetch
 }) {
-  const text = kind === "trade_idea" && idea
+  const text = kind === "trade_idea" && idea && hasRealtimeQuote(idea)
     ? formatTradeIdeaMessage(idea, { marketContext: idea.marketContext, paperAccount })
     : formatTopicStatusMessage({ symbol, idea, ticker });
   const telegram = await sendTelegramSymbolMessage({
@@ -1610,6 +1625,13 @@ export async function sendBestSignalNotifications({
   paperAccount,
   fetchImpl = globalThis.fetch
 }) {
+  if (!hasRealtimeQuote(signal)) {
+    return {
+      telegram: { ok: false, skipped: true, reason: "missing_realtime_quote" },
+      lark: { ok: false, skipped: true, reason: "missing_realtime_quote" }
+    };
+  }
+
   const text = formatBestSignalMessage(signal, { paperAccount });
   const [telegram, lark] = await Promise.all([
     sendTelegramSymbolMessage({ symbol: signal.symbol, text, fetchImpl }),

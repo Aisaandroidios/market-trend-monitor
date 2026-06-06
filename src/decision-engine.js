@@ -97,6 +97,7 @@ export function parseBinanceFutures24hTickers(rawTickers) {
       symbol: String(ticker.symbol ?? "").toUpperCase(),
       quoteVolume: Number(ticker.quoteVolume ?? 0),
       volume: Number(ticker.volume ?? 0),
+      lastPrice: Number(ticker.lastPrice ?? 0),
       priceChangePercent: Number(ticker.priceChangePercent ?? 0)
     }))
     .filter((ticker) => ticker.symbol && Number.isFinite(ticker.quoteVolume));
@@ -633,12 +634,10 @@ export function buildTradeIdea({
   derivatives = null,
   generatedAt = Date.now()
 }) {
-  const quote = currentQuote ?? (dataSource ? {
-    exchange: dataSource.exchange,
-    source: dataSource.provider,
-    symbol: dataSource.quoteSymbol ?? symbol,
-    price: roundPrice(price)
-  } : null);
+  const quote = currentQuote ? {
+    ...currentQuote,
+    price: roundPrice(currentQuote.price)
+  } : null;
 
   if (candles.length < 30) {
     return {

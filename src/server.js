@@ -56,7 +56,6 @@ import {
   summarizeSignalPerformance
 } from "./signal-memory.js";
 import { fetchFinnhubStockQuote } from "./stock-quote.js";
-import { buildSnapshotTradeIdea } from "./snapshot-strategy.js";
 import {
   fetchReferenceCandles,
   referenceDataStatus
@@ -156,6 +155,64 @@ function tickerMatchesDecisionSymbol(ticker, symbol) {
 
 function tickerForDecisionSymbol(symbol, tickers = []) {
   return tickers.find((ticker) => tickerMatchesDecisionSymbol(ticker, symbol));
+}
+
+function finitePrice(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function quoteFromTicker(ticker) {
+  const price = finitePrice(ticker?.price);
+  if (!price) return null;
+  const provider = String(ticker?.provider ?? ticker?.source ?? "").toLowerCase();
+  if (provider !== "binance") return null;
+  const updatedAt = Number.isFinite(Number(ticker?.eventTime))
+    ? Number(ticker.eventTime)
+    : Number(new Date(ticker?.updatedAt ?? 0));
+  if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > 120000) return null;
+
+  return {
+    exchange: ticker.provider ?? "quote",
+    source: ticker.provider ?? ticker.source ?? "quote",
+    symbol: ticker.sourceSymbol ?? ticker.symbol,
+    price,
+    realtime: true,
+    updatedAt: ticker.updatedAt
+  };
+}
+
+function realtimeQuoteForDecisionSymbol({
+  sourceSymbol,
+  displaySymbol = sourceSymbol,
+  tickers = [],
+  futuresStat,
+  derivatives
+} = {}) {
+  const lastPrice = finitePrice(futuresStat?.lastPrice);
+  if (lastPrice) {
+    return {
+      exchange: "Binance",
+      source: "Binance USD-M Futures last",
+      symbol: sourceSymbol,
+      price: lastPrice,
+      realtime: true
+    };
+  }
+
+  const markPrice = finitePrice(derivatives?.markPrice);
+  if (markPrice) {
+    return {
+      exchange: "Binance",
+      source: "Binance USD-M Futures mark",
+      symbol: sourceSymbol,
+      price: markPrice,
+      realtime: true
+    };
+  }
+
+  return quoteFromTicker(tickerForDecisionSymbol(displaySymbol, tickers))
+    ?? quoteFromTicker(tickerForDecisionSymbol(sourceSymbol, tickers));
 }
 
 function decisionSymbolFromTicker(ticker) {
@@ -933,7 +990,15 @@ export function createHttpServer({
       const { symbol, candles, dataSource } = result;
       if (!candles) continue;
 
-      const price = candles.at(-1)?.close;
+      const realtimeQuote = realtimeQuoteForDecisionSymbol({
+        sourceSymbol: symbol,
+        displaySymbol: displaySymbolForBinanceSymbol(symbol),
+        tickers: allTickerSnapshot,
+        futuresStat: futuresStatBySymbol.get(symbol),
+        derivatives: derivativesBySymbol.get(symbol)
+      });
+      if (!realtimeQuote?.realtime) continue;
+      const price = realtimeQuote.price;
       if (!price) continue;
 
       const news = await getNewsInsight({ symbol });
@@ -945,6 +1010,7 @@ export function createHttpServer({
         newsScore: news.score,
         news,
         dataSource,
+        currentQuote: realtimeQuote,
         futuresStat: futuresStatBySymbol.get(symbol),
         derivatives: derivativesBySymbol.get(symbol),
         generatedAt: Date.now()
@@ -964,7 +1030,15 @@ export function createHttpServer({
       });
       if (!referenceResult.ok || !referenceResult.candles?.length) continue;
 
-      const price = referenceResult.candles.at(-1)?.close;
+      const realtimeQuote = realtimeQuoteForDecisionSymbol({
+        sourceSymbol: symbol,
+        displaySymbol,
+        tickers: allTickerSnapshot,
+        futuresStat: futuresStatBySymbol.get(symbol),
+        derivatives: derivativesBySymbol.get(symbol)
+      });
+      if (!realtimeQuote?.realtime) continue;
+      const price = realtimeQuote.price;
       if (!price) continue;
       const news = await getNewsInsight({ symbol: displaySymbol });
       const idea = buildTradeIdea({
@@ -975,6 +1049,7 @@ export function createHttpServer({
         newsScore: news.score,
         news,
         dataSource: referenceResult.dataSource,
+        currentQuote: realtimeQuote,
         generatedAt: Date.now()
       });
 
@@ -995,7 +1070,15 @@ export function createHttpServer({
         limit: 120
       });
       if (referenceResult.ok && referenceResult.candles?.length) {
-        const price = referenceResult.candles.at(-1)?.close;
+        const realtimeQuote = realtimeQuoteForDecisionSymbol({
+          sourceSymbol: normalizedSymbol,
+          displaySymbol: normalizedSymbol,
+          tickers: allTickerSnapshot,
+          futuresStat: futuresStatBySymbol.get(normalizedSymbol),
+          derivatives: derivativesBySymbol.get(normalizedSymbol)
+        });
+        if (!realtimeQuote?.realtime) continue;
+        const price = realtimeQuote.price;
         if (price) {
           const news = await getNewsInsight({ symbol: normalizedSymbol });
           const idea = buildTradeIdea({
@@ -1006,6 +1089,7 @@ export function createHttpServer({
             newsScore: news.score,
             news,
             dataSource: referenceResult.dataSource,
+            currentQuote: realtimeQuote,
             generatedAt: Date.now()
           });
 
@@ -1014,18 +1098,6 @@ export function createHttpServer({
         }
       }
 
-      let ticker = tickerForDecisionSymbol(normalizedSymbol, allTickerSnapshot);
-      if (!ticker) ticker = await fetchFinnhubStockQuote({ symbol: normalizedSymbol });
-      if (!ticker) continue;
-
-      const idea = buildSnapshotTradeIdea({
-        ticker,
-        symbol: normalizedSymbol,
-        generatedAt: Date.now()
-      });
-      if (!idea) continue;
-
-      await storeReviewedIdea({ idea, sourceSymbol: normalizedSymbol, candles: [] });
     }
 
     const runtimeModelSignals = await buildPythonModelSignals({
